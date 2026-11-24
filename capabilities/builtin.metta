@@ -27,7 +27,7 @@
 !(set-tool-option write-file max-length 100000)
 !(set-tool-option write-file auto-approve agent_tools.write_is_new_file)   ; asks only to OVERWRITE
 
-!(declare-tool run-python "run a short Python 3 program and return what it prints; use print(). Separate process, 15s limit, no third-party packages." needs-approval agent_tools.run_python)
+!(declare-tool run-python "run a short Python 3 program and return what it prints; use print(). Separate process, runs in the workspace folder (open files by their workspace path), 15s limit, no third-party packages." needs-approval agent_tools.run_python)
 !(set-tool-option run-python timeout 25)
 !(set-tool-option run-python max-length 20000)
 !(set-tool-option run-python max-output 8000)

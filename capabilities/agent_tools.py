@@ -31,7 +31,6 @@ import re
 import socket
 import subprocess
 import sys
-import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -266,22 +265,22 @@ def _python():
 
 
 def run_python(code):
-    """Runs in a NEW process: isolated mode (-I), empty temp dir as cwd, minimal
+    """Runs in a NEW process: isolated mode (-I), the WORKSPACE as cwd (so it can
+    open the files the other tools see, e.g. open("sales.csv")), minimal
     environment (no API keys), CPU/memory/file limits, 15 s wall clock.
     Not a full sandbox: it can still read files your user can read and use the
     network — which is why this tool needs approval."""
     code = str(code)
     if code.startswith("```"):
         code = re.sub(r"^```[a-zA-Z]*\n?|```$", "", code.strip()).strip()
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            p = subprocess.run([_python(), "-I", "-c", code], cwd=tmp, capture_output=True,
-                               text=True, timeout=15, env={"PATH": "/usr/bin:/bin"},
-                               preexec_fn=_limits)
-        except subprocess.TimeoutExpired:
-            return ["error", "python timed out after 15s"]
-        except OSError as e:
-            return ["error", f"cannot start python: {e}"]
+    try:
+        p = subprocess.run([_python(), "-I", "-c", code], cwd=workspace(), capture_output=True,
+                           text=True, timeout=15, env={"PATH": "/usr/bin:/bin"},
+                           preexec_fn=_limits)
+    except subprocess.TimeoutExpired:
+        return ["error", "python timed out after 15s"]
+    except OSError as e:
+        return ["error", f"cannot start python: {e}"]
     out = (p.stdout or "")[-8000:]
     err = (p.stderr or "")[-3000:]
     if p.returncode != 0:

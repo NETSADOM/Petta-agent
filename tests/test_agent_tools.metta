@@ -45,6 +45,9 @@
 !(test (repr (py-call (agent_tools.write_file "{\"path\": \"sub/new.txt\", \"content\": \"made\"}"))) "(ok wrote 4 characters to sub/new.txt)")
 !(test (repr (execute read-file "sub/new.txt")) "(ok made)")
 
+; run-python works in the workspace too: it can open what read-file sees
+!(test (repr (py-call (agent_tools.run_python "print(len(open('sub/new.txt').read()))"))) "(ok 4)")
+
 ; ---------------- run-shell ----------------
 ; read-only commands run without asking...
 !(test (repr (execute run-shell "echo hello")) "(ok exit code 0\nstdout:\nhello)")

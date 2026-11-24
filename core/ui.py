@@ -228,9 +228,9 @@ def _box(title, text):
         _out("  " + line)
 
 
-def banner(tools, skills, stats, _key_set=None, _model=None):
-    # key/model are read here: a Python bool passed through MeTTa comes back
-    # as the TEXT "false", which Python treats as true.
+def banner(tools, skills, stats):
+    # whether an LLM is configured is read here, not passed in: a Python bool
+    # passed through MeTTa comes back as the TEXT "false", which Python treats as true.
     import llm_client
     _out(bold("P-agent") + dim("  — MeTTa/PeTTa reasoning + an LLM"))
     _out(f"  tools:  {', '.join(str(t[0]) for t in tools) or dim('none yet (add them in my_capabilities.metta)')}")
@@ -290,14 +290,6 @@ def cancel_requested(_=None):
     except (OSError, ValueError):
         pass
     return False
-
-
-def key_set(_=None):
-    return bool(os.environ.get("GEMINI_API_KEY", "").strip())
-
-
-def model(_=None):
-    return os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 
 def quit_now(_=None):

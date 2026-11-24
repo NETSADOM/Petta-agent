@@ -24,14 +24,6 @@ def _log(prompt, answer):
         pass
 
 
-def ask(question):
-    """Free-text answer. EOF (no terminal / piped input ran out) → ""."""
-    try:
-        return input(f"{question}\n> ").strip()
-    except EOFError:
-        return ""
-
-
 def confirm(question):
     """Yes/no. Anything except y/yes — including EOF — means NO (safe default)."""
     try:

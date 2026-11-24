@@ -53,10 +53,12 @@ Translated proposals go through exactly the same validation and gates.
 | Tool | Level | Notes |
 |---|---|---|
 | `calc` | safe | AST evaluator, no `eval`; gate pattern allows only arithmetic |
+| `web-search` | safe | DuckDuckGo (lite page), no key: top 5 results as title, url, snippet; read a page with `http-get` |
 | `wiki-search` | safe | Wikipedia search + summary, no key |
+| `delegate` | safe | **core, sub-agent**: a helper agent does a self-contained sub-task in a fresh context (own plan, steps, `sub-agent-turns` 20) and returns its answer; the parent's working memory is restored; helpers can't start helpers |
 | `list-files`, `read-file` | safe | only inside the workspace (`PAGENT_WORKSPACE`, default `workspace/`); `..` and absolute paths refused; missing file, directory, binary and empty files answered in words |
 | `write-file` | needs-approval | JSON `{"path", "content"}`, workspace only; bad JSON, bad path and OS errors (permission, path through a file) answered in words |
-| `run-python` | needs-approval | separate `python3 -I` process, temp dir, empty env (no keys), CPU/memory/file/process limits, 15 s |
+| `run-python` | needs-approval | separate `python3 -I` process in the workspace folder, empty env (no keys), CPU/memory/file/process limits, 15 s |
 | `run-shell` | needs-approval | `sh` in the workspace, no stdin, env without `*KEY*/*TOKEN*/*SECRET*/*PASSWORD*`; returns exit code + stdout + stderr; non-zero exit → `(error ..)` with the output; after 60 s (`PAGENT_SHELL_TIMEOUT`) the whole process group is killed and the partial output returned; never retried |
 | `send-message` | safe | **core** (`core/agent.metta`): shows the user a message without waiting |
 | `ask-user` | safe | **core**: asks and waits for one line; EOF, Ctrl+C or no answer within 600 s (`PAGENT_ASK_TIMEOUT`, terminal only) → `(error "the user did not answer: ...")`. The `(ask-user "q")` reply is the same tool |
@@ -124,7 +126,8 @@ capabilities/capability_checks.py  objective verifiers
 core/prompts.py         system prompts + context formatting (<data> fencing)
 core/llm.metta          ask Gemini, parse + validate replies, load plans (see below)
 core/agent.metta        THE LOOP: propose → validate → permit → execute → record → repeat
-core/io_helper.py       console input (ask, confirm y/N, read goal)
+core/io_helper.py       console input (confirm y/N, read goal) + the send-message / ask-user tools
+core/session.py         the last 5 goals of this CLI session (shown to the model)
 core/tools.metta        tool registry, input validation, limits, permission gate
 core/toolrunner.py      runs a tool with timeout + output cap, writes data/audit.jsonl
 core/skills.metta       skill registry + discovery (keyword scoring, availability)
@@ -137,24 +140,26 @@ core/verify.metta       3-layer verification of final answers
 core/ui.py              CLI renderer (the only file that decides how output looks), cancel check
 main.metta              CLI:  sh run.sh main.metta
 my_capabilities.metta   YOUR tools and skills (imported by main.metta)
-tests/fake_tools.py     test-only fake tools
-tests/test_bridge.metta atom ops, rules, sread, py-call, errors, save
-tests/test_persist.metta reload in a fresh process
-tests/test_schema.metta  tools/skills, facts, tasks, steps
-tests/test_schema_reload.metta facts + metadata survive a restart
-tests/run_tests.sh      runs all, in order, fails on any ❌
-data/                   saved knowledge bases
+tests/fake_tools.py     test-only fake tools (fake_openai.py: a local fake LLM server)
+tests/test_*.metta      one file per part; test_agent_tools, test_long_task and
+                        test_subagent cover the requirements end to end
+tests/run_tests.sh      runs all, in order, fails on any ❌ (no API key needed)
+eval/                   offline + live evaluation (sh eval/run_eval.sh)
+scripts/drive_session.py  plays the user in one CLI session (for recording logs)
+scripts/record_logs.sh  records the 3 example tasks in logs/goals.txt
+logs/                   session transcripts (logs/session-*.log) + the recorded goals
+data/                   saved knowledge bases, audit log (git-ignored)
 ```
 
-## Run (Ubuntu Bash, not PowerShell)
+## Run (Linux or WSL; a POSIX shell, not PowerShell)
 
-The project lives on the Windows side (`C:\Users\netsa\Icog\PeTTa-Agent`);
-Ubuntu sees that folder as `/mnt/c/Users/netsa/Icog/PeTTa-Agent`.
-PeTTa stays where it is (`~/PeTTa`, override with `PETTA_HOME`).
+Requirements: [PeTTa](https://github.com/trueagi-io/PeTTa) with SWI-Prolog and
+Python 3 (janus). PeTTa is expected at `~/PeTTa` (override with `PETTA_HOME`).
+No Python packages beyond the standard library.
 
 ```bash
-cd /mnt/c/Users/netsa/Icog/PeTTa-Agent
-export GEMINI_API_KEY=...     # or OPENAI_API_KEY + OPENAI_MODEL (+ OPENAI_BASE_URL)
+git clone https://github.com/NETSADOM/PeTTa-Agent.git && cd PeTTa-Agent
+echo 'GEMINI_API_KEY=...' > .env   # or OPENAI_API_KEY + OPENAI_MODEL (+ OPENAI_BASE_URL); .env is git-ignored
 sh run.sh main.metta          # start the agent: type goals, one after another
 sh tests/run_tests.sh         # expect: ALL TESTS PASSED (no key needed)
 sh run.sh some_file.metta     # run any MeTTa file
@@ -175,6 +180,9 @@ sh run.sh some_file.metta     # run any MeTTa file
 | Turn limit; report when stuck | `max-iterations`, `no-progress`, `stop-report` → `ui._stop_report` | `tests/test_long_task.metta`, CLI block |
 | Ask the user instead of guessing | `ask-user` tool + "ASK, DON'T GUESS" rules in `core/prompts.py` | `tests/test_agent_tools.metta` |
 | Shell timeouts; destructive commands need approval | `run_shell` (60 s, kills the process group), `shell_is_read_only` allow-list | `tests/test_agent_tools.metta` |
+| Optional: web search | `web-search` (DuckDuckGo), `wiki-search`, `http-get` | `tests/test_subagent.metta` (parser), `tests/test_llm_live.metta` |
+| Extra: sub-agents | `delegate` in `core/agent.metta` (`run-helper`) | `tests/test_subagent.metta` |
+| Logs of 3 tasks, one > 20 turns | `logs/` (recorded with `scripts/record_logs.sh`) | — |
 
 ## The CLI (`main.metta` + `core/ui.py`)
 
@@ -452,10 +460,10 @@ Every call goes through `(execute TOOL INPUT)`, gates in this order:
 
 | # | Gate | Failure |
 |---|---|---|
-| 1 | tool declared? | `(error not-permitted)` |
+| 1 | tool declared? | `(error (unknown-tool T (available ...)))` |
 | 2 | input: not blank, `max-length`, every `pattern` | `(error (invalid-input (...)))` — before any approval prompt |
 | 3 | `max-calls` per run | `(error call-limit)` |
-| 4 | `safe` runs; `needs-approval` asks y/N (default **no**) | `(error denied-by-user)` |
+| 4 | `safe` runs; `needs-approval` runs at once if its `auto-approve` check says the input is harmless, else asks y/N (default **no**) | `(error denied-by-user)` |
 | 5 | run in thread, `timeout`, output cut at `max-output`, exceptions caught | `(error timeout after Ns)`, `(error exception Type: msg)` |
 
 Options and defaults: `timeout 30`, `max-length 2000`, `max-output 4000`,
@@ -542,29 +550,24 @@ The key is never written into error messages.
 20. A rule that other files extend later (like `metta-tool`) needs one base
     rule in the first file, so PeTTa knows it is a function (gotcha 12).
 
-## Checklist
+## Status
 
-- [x] **Phase 1** – environment checked, PeTTa explored, bridge + persistence tested
-- [x] **Phase 2** – schema for `&caps` / `&kb` / `&wm` + reasoning rules, 61 tests passing
-- [x] **Phase 3** – Gemini REST, S-expression replies, plan/act split, validation, error kinds (100 tests)
-  - [ ] live test (`tests/test_llm_live.metta`) — waiting for `GEMINI_API_KEY`; confirm default model with `--list-models`
-- [x] **Phase 4** – agent loop in MeTTa, permission gate, approvals, loop guards, CLI (129 tests)
-  - [ ] live multi-step run with Gemini — waiting for `GEMINI_API_KEY` + your first tool
-- [x] **Phase 5** – tool registry, 5-gate execution, timeouts, output cap, audit log (159 tests)
-  - [ ] your tools: web search, calculator, python, files, memory, API
-- [x] **Phase 6** – skills + discovery, plan `(uses ..)`, task selection, failure/blocking, replan, capability gaps (201 tests)
-  - [ ] your skills: research, data analysis, file analysis, math, coding, summarization
-- [x] **Phase 7** – selective learning, sensitivity filter, episodes, relevant recall, size limit (244 tests)
-- [x] **Phase 8** – error classes, retry + backoff, alternatives, learned fixes, 3-layer verification (296 tests)
-- [x] **Phase 9** – event/renderer split, pretty CLI, commands, cancellation, integration + CLI tests (318 tests)
-  - [ ] first live run with Gemini + your tools
-- [x] **Phase 10** – offline evaluation 45/50 (100% on every safety category); live harness built and dry-run checked
-  - [ ] live evaluation: `sh eval/run_eval.sh` once `GEMINI_API_KEY` is set
+- [x] Tools: read-file, write-file, run-shell, send-message, ask-user (+ web-search, wiki-search, http-get, run-python, calc, memory); every result is text
+- [x] Turn loop with one or several calls per reply; unknown tools come back as errors
+- [x] The agent decides it is done (verified final) and tells the user
+- [x] Long tasks (40 turns, tested with 27), recovery by changing approach, stuck report
+- [x] Several goals in one session without a restart; bounded prompt
+- [x] Ask instead of guessing; shell timeout; approval for destructive commands
+- [x] Extra: sub-agents (`delegate`), web search
+- [x] 520+ offline checks (`sh tests/run_tests.sh`), offline evaluation 45/50 (100 % on every safety category)
+- [x] Live model check (`tests/test_llm_live.metta`) with `gemini-3.8-flash`
+- [ ] Logs of 3 real tasks: `sh scripts/record_logs.sh` (needs a model with enough quota: the Gemini free tier allows only 20 requests per model per day, a full session needs about 100)
+- [ ] Live evaluation: `sh eval/run_eval.sh` with a key set
 
 ### Known limitations (from the evaluation)
 - Memory retrieval and skill discovery use word overlap: no synonyms.
 - The sensitivity filter is pattern-based: cautious (some false positives) and can miss secrets in unusual formats.
-- Timed-out tools keep running in a background thread; tools are not sandboxed processes.
+- A timed-out *Python* tool keeps running in a background thread (shell commands are killed); tools are not sandboxed beyond the workspace, limits and approvals.
 - Semantic verification is an LLM judging an LLM.
-- Sequential task execution only (`ready-tasks` is the hook for parallel).
+- Calls run one after another; helpers (`delegate`) run one at a time.
 - Capability *creation* (P-agent writing new tools) is not built: gaps are recorded as `(capability-gap ...)` for you.

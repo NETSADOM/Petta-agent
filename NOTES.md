@@ -1,72 +1,62 @@
-# NOTES — P-agent, a CLI agent written in MeTTa (PeTTa)
+# NOTES — P-agent, a CLI agent in MeTTa (PeTTa)
 
-**Idea.** The agent's loop, state and decisions are MeTTa running in PeTTa.
-The LLM only *proposes* the next step as an S-expression (or JSON). PeTTa
-checks every proposal and runs it through the tool gates. Python is a thin
-layer for files, processes, HTTP and the terminal. There are three AtomSpaces:
-`&caps` (tools, skills, config), `&wm` (the current goal: plan, tasks, steps)
-and `&kb` (long-term memory, saved after every goal).
+**Design.** The loop, state and every decision are MeTTa in PeTTa; the LLM
+only *proposes* the next step (an S-expression or JSON). Python is a thin layer
+for files, processes, HTTP and the terminal. Three AtomSpaces: `&caps` (tools,
+skills, config), `&wm` (this goal: plan, tasks, steps) and `&kb` (long-term
+memory, saved after every goal).
 
-**One turn.** `context.metta` builds the prompt from the AtomSpaces: goal,
-`PROGRESS: turn N of 40`, earlier goals of this session, plan with statuses,
-current task with its skill guide, windowed steps, recovery hints, tool catalog,
-relevant facts. The model's reply is parsed (`reply_parser.py`) into one call,
-or several `(actions …)` (up to 5, run in order). Each call goes through
-`execute`: known tool? → input checks → per-run call limit → permission → run
-with a timeout. The result is recorded as `(step N TOOL INPUT OUTCOME)` and is
-in the next prompt. An unknown tool name never runs. It comes back as
-`(error (unknown-tool X (available …)))`, like any other error.
+**A turn.** `context.metta` builds the prompt: goal, `PROGRESS: turn N of 40`,
+earlier goals of the session, plan with statuses, the current task's skill
+guide, windowed steps, recovery hints, tool catalog. The reply is parsed into
+one call or up to 5 `(actions …)`. Each call passes `execute`: known tool,
+input checks, call limit, permission, then a run with a timeout. The result
+becomes `(step N TOOL INPUT OUTCOME)` in the next prompt. Unknown tools never
+run; they come back as `(error (unknown-tool X (available …)))`.
 
-**Errors are text, never crashes.** Every tool returns `(ok "…")` or
-`(error "…")`. The runner catches everything a tool can raise (even
-`SystemExit` and Ctrl+C) and abandons hung tools at their timeout. In the CLI
-each goal runs inside `catch`, so the session survives even an internal error.
+**Errors are text.** Every tool returns `(ok "…")` or `(error "…")`. The runner
+catches anything a tool raises, even `SystemExit` and Ctrl+C, and gives up on
+hung tools at their timeout. Each CLI goal runs inside `catch`.
 
-**Finishing and long tasks.** The model proposes `(final "…")`. PeTTa accepts
-it only when every plan task is done and verification passes; otherwise it
-says why. Long runs stay on track: the goal and plan are in every prompt, the
-last 8 steps are shown in full, the 20 before them in short form, and anything
-older is only counted. Error limits count failures *in a row*, so a few stray
-glitches over 30 turns don't end a run. Recovery: an identical call that
-failed twice is refused with advice to change the input or tool, and only the
-third refusal stops the run.
+**Done, long runs, recovery.** `(final …)` is accepted only when every plan
+task is done and verification passes. The goal and plan are in every prompt.
+The last 8 steps are shown in full, the 20 before them in short form, and
+older ones only as counts. Error limits count failures *in a row*. A call that
+failed twice in exactly the same form is refused with advice to change the
+input or tool; the third refusal stops the run.
 
-**Sessions.** The CLI waits for the next goal until `quit`. Working memory is
-cleared per goal. The last 5 goals and their outcomes (≤ 300 characters each)
-go into the prompt, so follow-ups ("do the same for…") work. The prompt is
-bounded however long the session runs: tool output is cut at `max-output`,
-each observation is clipped to 600 characters, and the history in any prompt
-is capped at 16 000 characters.
+**Sessions and bounds.** The CLI waits for the next goal until `quit`. The
+last 5 goals (≤ 300 characters each) go into the prompt, so follow-ups work.
+Tool output is cut at `max-output`, each observation at 600 characters, and
+the history in any prompt at 16 000 characters.
 
-**Stuck.** At 40 turns, 3 refused repeats, 8 failed steps in a row, 3 unusable
-replies in a row, or an unreachable model, the agent stops and tells the user
-in plain words: why it stopped, how far the plan got, the last errors, and
-what the user can do next.
+**Stuck, and asking.** At 40 turns, after 3 refused repeats, 8 failed steps
+in a row, or with an unreachable model, the agent stops and says why, how far
+the plan got, the last errors and what the user can do. `ask-user` is a core
+tool, and the prompts say to ask instead of inventing names, files or values.
+If no answer comes, the agent states its assumption.
 
-**Ask, don't guess.** `ask-user` is a core tool. The prompts say to ask one
-short question when information only the user has is missing, never to invent
-names, files or values, and to use tools first for anything findable. With no
-answer (EOF, 600 s, Ctrl+C) the tool says so, and the agent states its
-assumption in the final answer.
+**Safety.** `run-shell` is killed after 60 s (the whole process group), with
+no stdin and no secret-looking environment variables. An allow-list lets
+read-only commands (`ls`, `cat`, `grep`, `git status`, pipes) run at once.
+Anything else (`rm`, `mv`, `>`, `$(…)`, scripts, `git push`) asks `[y/N]`, and
+no terminal means no. `write-file` asks only to overwrite. File tools stay in
+the workspace.
 
-**Safety.** `run-shell` has a 60 s limit, after which the whole process group
-is killed and the partial output returned. It never gets stdin, never gets
-environment variables that look like secrets, and is never retried
-automatically. Approval works from an **allow-list**: read-only commands
-(`ls`, `cat`, `grep`, `git status`, pipes of these) run at once; anything else
-(`rm`, `mv`, `>`, `$(…)`, scripts, `git push`, …) asks `[y/N]`, and no
-terminal means no. `write-file` creates new files freely but asks before
-overwriting. File tools cannot leave the workspace.
+**Extras.** `web-search` (DuckDuckGo, no key) alongside `wiki-search` and
+`http-get`. **Sub-agents:** `delegate` runs a helper agent on a self-contained
+part of the goal, with a fresh context and a 20-turn limit. The parent's
+working memory is restored afterwards, so only the helper's answer enters the
+parent's context. The Gemini client retries busy models (503/429) and falls
+back to other Flash models.
 
-**Testing.** `sh tests/run_tests.sh` runs 500+ checks with a scripted model
-and no API key. They include a 27-turn run (a batch of calls, an unknown tool,
-a failure followed by a different call), several goals in one CLI session, the
-stuck report, the transcript, and the shell allow-list. `logs/` holds a real
-session with 3 tasks.
+**Evidence.** `sh tests/run_tests.sh` runs 520 checks with a scripted model
+and no key. They cover a 27-turn run, several goals in one session, the stuck
+report, the shell allow-list and delegation. `scripts/record_logs.sh` records a
+real session with the 3 tasks in `logs/goals.txt` into `logs/session-*.log`.
 
-**Limits / next steps.** The safe-command check is deliberately conservative,
-so harmless but unlisted commands still ask. Python threads can't be killed,
-so a hung *Python* tool is abandoned rather than stopped (shell commands *are*
-killed). Steps run one after another. The quality of long runs depends on the
-model. Next steps: summarising old steps with the LLM instead of clipping
-them, per-project allow-lists, and running independent tasks in parallel.
+**Limits.** The allow-list is conservative, so some harmless commands still
+ask. A hung *Python* tool is abandoned, not killed (threads can't be killed);
+shell commands are killed. Calls run one after another. Long-run quality
+depends on the model. Next steps: LLM summaries of old steps,
+per-project allow-lists, and parallel helpers.
