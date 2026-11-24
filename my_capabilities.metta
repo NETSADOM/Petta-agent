@@ -1,7 +1,7 @@
 ; my_capabilities.metta — the agent's tools and skills (imported by main.metta).
 ;
 ; Built-in set (capabilities/builtin.metta):
-;   tools   calc, wiki-search, list-files, read-file, write-file*, run-python*,
+;   tools   calc, web-search, wiki-search, list-files, read-file, write-file*, run-python*,
 ;           run-shell*, http-get*, now, memory-search, memory-store   (* = asks you y/N)
 ; Always present (core/agent.metta): send-message, ask-user
 ;   skills  research, math, file-analysis, data-analysis, coding, summarization

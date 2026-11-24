@@ -13,6 +13,10 @@
 !(set-tool-option wiki-search max-length 200)
 !(set-tool-option wiki-search timeout 25)
 
+!(declare-tool web-search "search the web (DuckDuckGo); input is a short query. Returns the top results: title, url and snippet. Use http-get on a url to read the page." safe agent_tools.web_search)
+!(set-tool-option web-search max-length 300)
+!(set-tool-option web-search timeout 25)
+
 !(declare-tool list-files "list the files in the workspace folder (input: anything)" safe agent_tools.list_files)
 !(set-tool-option list-files allow-empty yes)
 !(declare-tool read-file "read a text file from the workspace; input is its relative path, e.g. data/sales.csv" safe agent_tools.read_file)
@@ -62,14 +66,16 @@
           ($c (learn-fact $c 0.8 agent)))))
 
 ; ============================================================ recovery
+!(declare-alternative web-search wiki-search)
+!(declare-alternative wiki-search web-search)
 !(declare-alternative wiki-search memory-search)
 !(declare-alternative wiki-search http-get)
 
 ; ============================================================ skills
 !(declare-skill research "find facts and answer factual questions"
-                (wiki-search memory-search)
+                (web-search wiki-search memory-search)
                 (who what when where which find search research history born capital population largest highest founded invented area height wikipedia))
-!(set-skill-info research procedure "1. memory-search first: it may already be known. 2. wiki-search with a SHORT query (2-4 words). 3. If the summary lacks the fact, search again with different words. 4. Answer only from observations and name the source article.")
+!(set-skill-info research procedure "1. memory-search first: it may already be known. 2. web-search (current or specific facts) or wiki-search (encyclopedic facts) with a SHORT query. 3. If the snippets lack the fact, http-get the best url or search again with different words. 4. Answer only from observations and name the source.")
 !(set-skill-info research output "the answer + which article it came from")
 !(set-skill-info research on-error "if wiki-search fails twice, try http-get on https://en.wikipedia.org/wiki/TITLE, or say what could not be found")
 !(set-skill-verifier research capability_checks.number_is_observed)

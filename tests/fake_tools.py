@@ -141,6 +141,22 @@ def make_fixtures(root):
     return True
 
 
+DDG_PAGE = """<table><tr><td valign="top">1.&nbsp;</td><td>
+<a rel="nofollow" href="https://docs.python.org/3/library/unittest.html" class='result-link'>unittest &mdash; Unit testing framework</a>
+</td></tr><tr><td>&nbsp;</td><td class='result-snippet'>
+The <b>unittest</b> unit testing framework was inspired by JUnit.
+</td></tr>
+<tr><td valign="top">2.&nbsp;</td><td>
+<a rel="nofollow" href="https://example.org/unittest" class='result-link'>Python Unittest Tutorial</a>
+</td></tr><tr><td>&nbsp;</td><td class='result-snippet'>A tutorial.</td></tr></table>"""
+
+
+def ddg_fixture_titles(_=None):
+    """web-search's parser on a saved DuckDuckGo-lite page (no network)."""
+    import agent_tools
+    return " || ".join(" | ".join(r) for r in agent_tools.parse_ddg(DDG_PAGE))
+
+
 def timed(spec, *args):
     """→ whole seconds a call took (proves a timeout really kills, not just waits)."""
     import importlib

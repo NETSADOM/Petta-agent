@@ -36,6 +36,8 @@
 !(set-config max-llm-errors 3)       ; temporary API errors IN A ROW before giving up
 !(set-config max-refusals 3)         ; repeated failing calls refused, then stop
 !(set-config max-failures-in-row 8)  ; this many failed steps in a row (any tools) = stuck
+!(set-config agent-depth 0)          ; 0 = the main agent, 1 = a helper (sub-agent)
+!(set-config sub-agent-turns 20)     ; turn limit of one helper run
 !(set-config max-final-rejections 2) ; then accept final as done-unverified
 
 (= (show $x) (emit $x))      ; all output goes through emit (schema.metta)
@@ -106,7 +108,8 @@
           ($s3 (if (fatal $plan) () (show (cancel-hint))))
           ($result (if (fatal $plan) (stopped $plan) (agent-loop 1)))
           ($rep (if (== (car-atom $result) stopped) (show (stuck-report $result)) ()))
-          ($ses (py-call (session.record (goal-text) (repr $result))))   ; for the next goal
+          ($ses (if (== (config-value agent-depth) 0)                     ; helpers are not session tasks
+                    (py-call (session.record (goal-text) (repr $result))) ()))
           ($m (form-episode $result))        ; memory: keep successful runs
           ($f (if (== (car-atom $result) done) (learn-recoveries) ())))   ; what fixed failures
          $result))
@@ -288,3 +291,47 @@
                  (stopped $p)
                  (let $b (py-call (recovery.sleep (* $k (config-value llm-backoff))))   ; back off
                       (continue $i))))))
+
+; ================================================================ sub-agents
+; (action delegate "complete sub-task") — a HELPER agent does a self-contained
+; part of the work with a fresh, small context (its own plan, steps, turn
+; limit) and returns its answer as the tool result. The parent's working
+; memory is saved before and restored after, so the parent carries on exactly
+; where it was; only the helper's answer enters the parent's context. That
+; keeps long goals short in the prompt. Helpers cannot start helpers (depth 1),
+; they use the same tools, gates and approvals.
+!(declare-tool delegate "hand a self-contained sub-task to a helper agent that starts with a fresh context and returns its answer. Input: the COMPLETE sub-task with every detail it needs (file names, values, expected output) - the helper sees nothing else. Use it for big independent parts of a long goal." safe metta)
+!(set-tool-option delegate retry no)
+!(set-tool-option delegate max-length 3000)
+!(set-tool-option delegate max-calls 6)
+
+(= (restore-wm $atoms)
+   (let* (($c (clear-wm))
+          ($added (collapse (let $a (superpose $atoms) (add-atom &wm $a)))))
+         restored))
+
+; the helper's result → text for the parent
+(= (helper-outcome $r)
+   (case (car-atom $r)
+         ((done (ok (index-atom $r 1)))
+          (done-unverified (ok (helper-answer-unverified (index-atom $r 1))))
+          (cancelled (error "the helper was cancelled by the user"))
+          ($other (error (helper-stopped (index-atom $r 1)))))))
+
+(= (run-helper $subgoal)
+   (let* (($saved (collapse (get-atoms &wm)))
+          ($turns (config-value max-iterations))
+          ($d (set-config agent-depth 1))
+          ($t (set-config max-iterations (config-value sub-agent-turns)))
+          ($s1 (show (sub-agent-start $subgoal)))
+          ($r (run-agent $subgoal))
+          ($s2 (show (sub-agent-end (car-atom $r))))
+          ($back (restore-wm $saved))
+          ($d2 (set-config agent-depth 0))
+          ($t2 (set-config max-iterations $turns)))
+         (helper-outcome $r)))
+
+(= (metta-tool delegate $subgoal)
+   (if (== (config-value agent-depth) 0)
+       (run-helper $subgoal)
+       (error "a helper cannot start another helper: do this step yourself")))

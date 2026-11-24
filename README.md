@@ -291,7 +291,7 @@ Task states: `pending ready running completed blocked failed cancelled`.
 
 Setup (Ubuntu Bash): add `export GEMINI_API_KEY=...` to `~/.bashrc`, open a
 new terminal, then check with `python3 core/gemini.py --list-models`.
-Optional: `GEMINI_MODEL` (default `gemini-2.5-flash`), `GEMINI_TIMEOUT` (60).
+Optional: `GEMINI_MODEL` (default `gemini-3.8-flash`), `GEMINI_TIMEOUT` (60).
 
 Gemini replies in **S-expressions**, parsed with `sread` into atoms.
 Planning and acting are separate prompts:

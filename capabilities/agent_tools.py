@@ -114,6 +114,63 @@ def wiki_search(query):
     return ["ok", text]
 
 
+# ---------------- web search (DuckDuckGo HTML, no key) ----------------
+# the "lite" page: plain HTML, no JavaScript (the html/ endpoint answers bots
+# with a 202 "anomaly" page)
+_DDG = "https://lite.duckduckgo.com/lite/"
+_RESULT = re.compile(r"""<a[^>]*href=["']([^"']+)["'][^>]*class=["']result-link["'][^>]*>(.*?)</a>(.*?)(?=<a[^>]*class=["']result-link["']|$)""", re.S)
+_SNIPPET = re.compile(r"""class=["']result-snippet["'][^>]*>(.*?)</td>""", re.S)
+
+
+def _clean(fragment):
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", fragment)).split())
+
+
+def _real_url(href):
+    """DuckDuckGo wraps links as /l/?uddg=<real url>."""
+    href = html.unescape(href)
+    if "uddg=" in href:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+        return q.get("uddg", [href])[0]
+    return "https:" + href if href.startswith("//") else href
+
+
+def parse_ddg(page, limit=5):
+    out = []
+    for href, title, rest in _RESULT.findall(page):
+        url = _real_url(href)
+        if "duckduckgo.com/y.js" in url:            # ads
+            continue
+        snip = _SNIPPET.search(rest)
+        out.append((_clean(title), url, _clean(snip.group(1)) if snip else ""))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def web_search(query):
+    """Search the web; top results as text: title, url, snippet. Read a page
+    with http-get afterwards when the snippet is not enough."""
+    q = " ".join(str(query).split())
+    if not q:
+        return ["error", "empty query"]
+    try:
+        req = urllib.request.Request(_DDG, urllib.parse.urlencode({"q": q}).encode(),
+                                     {"User-Agent": "Mozilla/5.0 (P-agent research tool)",
+                                      "Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            page = r.read(600_000).decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        return ["error", f"web search HTTP {e.code}" + (" (temporary)" if e.code >= 500 or e.code in (202, 429) else "")]
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return ["error", f"network unavailable: {e}"]
+    results = parse_ddg(page)
+    if not results:
+        return ["error", f"no web results for: {q} (try other words, or wiki-search)"]
+    lines = [f"{i}. {t}\n   {u}\n   {s}" for i, (t, u, s) in enumerate(results, 1)]
+    return ["ok", f"web results for: {q}\n" + "\n".join(lines)]
+
+
 # ---------------- files (workspace only) ----------------
 def _inside(name):
     """Resolve a workspace-relative path; refuse anything that escapes it."""

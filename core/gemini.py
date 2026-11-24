@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 
 API = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 # temporary errors may be retried; permanent ones must not be
 ERROR_KINDS = {
@@ -65,13 +65,47 @@ def reset_calls(_=None):
     return True
 
 
+FALLBACK_MODELS = "gemini-3.7-flash,gemini-3.5-flash,gemini-flash-latest"
+
+
+def _models():
+    first = os.environ.get("GEMINI_MODEL", DEFAULT_MODEL).strip()
+    rest = os.environ.get("GEMINI_FALLBACK_MODELS", FALLBACK_MODELS)
+    out = [first]
+    for m in rest.split(","):
+        m = m.strip()
+        if m and m not in out:
+            out.append(m)
+    return out
+
+
 def generate(system, prompt, model=None):
+    """One request to Gemini, made resilient: a temporary failure (503 "high
+    demand", 429, 500, network) is retried with backoff, and when a model stays
+    unavailable or is retired (404) the next model in GEMINI_FALLBACK_MODELS
+    is tried. Permanent errors (bad key, bad request, blocked) return at once.
+    Long runs must not die because one model had a busy minute."""
+    import time
+    models = [model] if model else _models()
+    tries = int(os.environ.get("GEMINI_RETRIES", "3"))
+    last = ["error", "config", "no model"]
+    for m in models:
+        for attempt in range(tries):
+            last = _generate_once(system, prompt, m)
+            if last[0] == "ok" or last[1] not in ("server", "rate-limit", "network"):
+                break
+            time.sleep(min(2 ** attempt * 2, 20))        # 2, 4, 8 s
+        if last[0] == "ok" or last[1] not in ("server", "rate-limit", "network", "model-not-found"):
+            return last
+    return last
+
+
+def _generate_once(system, prompt, model):
     """One request to Gemini. `system` = our instructions, `prompt` = task data."""
     CALLS["n"] += 1
     key = _key()
     if not key:
         return ["error", "config", "GEMINI_API_KEY is not set"]
-    model = model or os.environ.get("GEMINI_MODEL", DEFAULT_MODEL)
     timeout = float(os.environ.get("GEMINI_TIMEOUT", "60"))
     body = json.dumps({
         # instructions go in systemInstruction, data goes in contents:
@@ -94,7 +128,7 @@ def generate(system, prompt, model=None):
 
     candidates = data.get("candidates") or []
     parts = (candidates[0].get("content") or {}).get("parts", []) if candidates else []
-    text = "".join(p.get("text", "") for p in parts).strip()
+    text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
     if not text:
         reason = (data.get("promptFeedback") or {}).get("blockReason") \
             or (candidates[0].get("finishReason") if candidates else "no candidates")

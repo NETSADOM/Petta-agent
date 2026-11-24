@@ -49,6 +49,9 @@ TASK: choose the single next step. Reply with ONE of:
 (ask-user "question")                     ask the user; same as (action ask-user "question")
 Use (action send-message "text") to tell the user something during long work
 (progress, a partial result); it does not end the task — still give a final.
+If the catalog has delegate: for a big, self-contained part of a long goal, use
+(action delegate "complete sub-task with every detail") — a helper does it in a
+fresh context and returns its answer; your own context stays short.
 Only use tools listed in the catalog. Never invent tool names.
 Every tool returns text. An (error "...") result is an observation, not the end:
 read why (missing file, bad input, timeout, non-zero exit code, denied) and act on it.

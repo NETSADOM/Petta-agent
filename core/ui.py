@@ -67,7 +67,12 @@ def log_input(prompt, answer):
     return log_line(f"{_ANSI.sub('', str(prompt)).rstrip()} {answer}")
 
 
+_DEPTH = {"n": 0}         # > 0 while a helper (sub-agent) works: its output is indented
+
+
 def _out(line):
+    if _DEPTH["n"]:
+        line = "\n".join(dim("  │ ") + l for l in str(line).split("\n"))
     print(line, flush=True)
     log_line(line)
 
@@ -121,6 +126,12 @@ def render(event):
         _out(dim(f"  · ignored unusable reply: {fmt(a[0])}"))
     elif kind == "gemini-error":
         _out(yellow(f"  ⚠ Gemini error: {fmt(a[0])} — retrying"))
+    elif kind == "sub-agent-start":
+        _out(cyan("  ⤷ helper agent starts: ") + fmt(a[0], 200))
+        _DEPTH["n"] += 1
+    elif kind == "sub-agent-end":
+        _DEPTH["n"] = max(0, _DEPTH["n"] - 1)
+        _out(cyan("  ⤶ helper agent finished: ") + fmt(a[0]))
     elif kind == "stop-report":
         _stop_report(a)
     elif kind == "cancel-hint":
@@ -286,7 +297,7 @@ def key_set(_=None):
 
 
 def model(_=None):
-    return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    return os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 
 def quit_now(_=None):

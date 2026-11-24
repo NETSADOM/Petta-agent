@@ -46,6 +46,9 @@ run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_agent_tools.metta < data
 # the turn loop on a 27-turn task: batches, unknown tools, recovery, context
 run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_long_task.metta < /dev/null'
 
+# sub-agents (delegate) and web-search parsing
+run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_subagent.metta < /dev/null'
+
 # the real CLI (main.metta): commands, two goals in ONE session (no restart),
 # the stuck report, the session history, the transcript log, clean quit
 echo "== CLI (main.metta)"
