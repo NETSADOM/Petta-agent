@@ -161,13 +161,10 @@
            False)
        False))
 
-; skills named in the plan that don't exist or lack tools
-(= (bad-skills $p)
-   (collapse (let* (($tasks (plan-tasks $p))
-                    ($t (superpose $tasks))
-                    ($uses (task-uses $t))
-                    ($s (superpose $uses)))
-                   (if (and (skill-known $s) (skill-available $s)) (empty) $s))))
+; A (uses X) naming no usable skill (unknown, missing tools, or a TOOL name —
+; smaller models mix them up) is ignored when the plan is loaded: the task
+; itself is still fine, and rejecting the whole plan would only cost a turn.
+(= (usable-skill $s) (and (skill-known $s) (skill-available $s)))
 
 (= (plan-tasks $p) (cdr-atom $p))
 (= (plan-ids $p) (map-atom (plan-tasks $p) $t (task-id $t)))
@@ -192,10 +189,7 @@
                                        (if (task-shape-ok $t) (empty) bad)))
                         ())
                     (if (== (size-atom (unique-atom (plan-ids $p))) (size-atom $tasks))
-                        (if (deps-known $p)
-                            (let $bad (bad-skills $p)
-                                 (if (== $bad ()) $p (invalid (unavailable-skills $bad))))
-                            (invalid unknown-dependency))
+                        (if (deps-known $p) $p (invalid unknown-dependency))
                         (invalid duplicate-ids))
                     (invalid bad-task))))
        (invalid not-a-plan)))
@@ -212,7 +206,8 @@
           ($deps (task-deps $t))
           ($d1 (collapse (let $d (superpose $deps) (add-dependency $id $d))))
           ($uses (task-uses $t))
-          ($s1 (collapse (let $s (superpose $uses) (add-atom &wm (task-skill $id $s))))))
+          ($s1 (collapse (let $s (superpose $uses)
+                              (if (usable-skill $s) (add-atom &wm (task-skill $id $s)) (empty))))))
          $id))
 
 (= (load-plan $p)

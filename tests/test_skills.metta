@@ -37,8 +37,13 @@
 ; ---------------- plans that use skills ----------------
 !(test (check-plan (plan (task t1 "a" (uses shouting)) (task t2 "b" (uses shouting) (after t1))))
        (plan (task t1 "a" (uses shouting)) (task t2 "b" (uses shouting) (after t1))))
-!(test (check-plan (plan (task t1 "a" (uses research)))) (invalid (unavailable-skills (research))))
-!(test (check-plan (plan (task t1 "a" (uses dancing)))) (invalid (unavailable-skills (dancing))))
+; a skill that is unavailable, unknown or really a tool name: the plan is kept,
+; the (uses ..) is ignored when loading
+!(test (check-plan (plan (task t1 "a" (uses research)))) (plan (task t1 "a" (uses research))))
+!(test (check-plan (plan (task t1 "a" (uses dancing)))) (plan (task t1 "a" (uses dancing))))
+!(load-plan (plan (task t1 "a" (uses dancing)) (task t2 "b" (uses shouting))))
+!(test (skills-of-task t1) ())
+!(test (skills-of-task t2) (shouting))
 !(test (check-plan (plan (task t1 "a" (uses)))) (invalid bad-task))
 !(test (check-plan (plan (task t1 "a" (colour red)))) (invalid bad-task))
 !(test (check-plan (plan (task t1 "a") (task t2 "b" (after t1 t3)))) (invalid unknown-dependency))
