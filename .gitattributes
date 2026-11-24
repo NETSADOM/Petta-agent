@@ -1,0 +1,3 @@
+# Keep Unix line endings: this project runs in WSL (sh, PeTTa, Python),
+# and Windows-style CRLF breaks shell scripts.
+* text=auto eol=lf

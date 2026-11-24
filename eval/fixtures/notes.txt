@@ -1,0 +1,4 @@
+Project Kestrel status notes.
+The launch date moved from 3 March to 17 March because supplier parts were late.
+Budget used so far: 42 percent. Team size: 6 engineers.
+Main risk: the payment provider integration is not tested yet.

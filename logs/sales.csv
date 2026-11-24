@@ -1,0 +1,8 @@
+month,region,units,unit_price
+jan,north,120,15
+jan,south,80,15
+feb,north,95,16
+feb,south,110,16
+mar,east,60,18
+mar,north,130,16
+mar,south,90,17

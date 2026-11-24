@@ -1,0 +1,14 @@
+data/*.metta
+data/*.tmp
+data/*.txt
+data/*.jsonl
+__pycache__/
+.env
+eval/results_*.jsonl
+eval/*.log
+eval/sandbox/
+eval/report.md
+workspace/
+data/test_workspace/
+data/test_tools_ws/
+data/test_logs/

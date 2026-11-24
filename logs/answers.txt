@@ -1,0 +1,3 @@
+# What the "user" answers when the agent asks (ask-user), in order.
+The new person is Hana Tesfaye. She joins the Data Platform team on Monday 1 December, and her mentor is Dawit.
+Keep it friendly and under 120 words.
