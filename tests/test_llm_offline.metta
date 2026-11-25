@@ -24,13 +24,31 @@
 !(test (check-proposal (action "rm-rf" "/")) (invalid bad-shape))
 ; several calls in one reply
 !(test (check-proposal (actions (action calc "1") (action rm-rf "/"))) (actions (action calc "1") (action rm-rf "/")))
-!(test (check-proposal (actions (action calc "1") (final "x"))) (invalid bad-shape))
+!(test (check-proposal (actions (final "x") (final "y"))) (actions (final "x") (final "y")))   ; the first final ends the batch (agent.metta)
 !(test (check-proposal (actions)) (invalid bad-shape))
 !(test (parse-reply "(action calc \"1+1\")\n(action calc \"2+2\")") (actions (action calc "1+1") (action calc "2+2")))
 !(test (parse-reply "(actions (action calc \"1\") (action now \"\"))") (actions (action calc "1") (action now "")))
 !(test (parse-reply "[{\"tool\": \"calc\", \"input\": \"1\"}, {\"tool\": \"now\", \"input\": \"\"}]") (actions (action calc "1") (action now "")))
 ; one action among prose and a final: still the first form, as before
 !(test (parse-reply "(final \"a\") (action calc \"1\")") (final "a"))
+; parentheses in the prose before the reply are not the reply
+!(test (parse-reply "I will read it (carefully) now.\n(action read-file \"a.txt\")") (action read-file "a.txt"))
+!(test (parse-reply "Done (see above). (final \"x\")") (final "x"))
+; a task-done next to ONE action: both run, in order
+!(test (parse-reply "(task-done t1) (action calc \"2\")") (actions (task-done t1) (action calc "2")))
+!(test (check-proposal (parse-reply "(task-done t1) (action calc \"2\")")) (actions (task-done t1) (action calc "2")))
+; a batch may end with a final
+!(test (check-proposal (parse-reply "(task-done t2) (final \"done\")")) (actions (task-done t2) (final "done")))
+!(test (check-proposal (actions (action calc "1") (final "a"))) (actions (action calc "1") (final "a")))
+!(test (check-proposal (actions (action calc "1") (final "a" "b"))) (invalid bad-shape))
+; task-done takes ids only: a note added to it is dropped, not the whole reply
+!(test (parse-reply "(task-done t1 \"found it\")") (task-done t1))
+!(test (check-proposal (parse-reply "(actions (task-done t1 \"Dropout is (a) technique\") (action calc \"1\"))"))
+       (actions (task-done t1) (action calc "1")))
+; a final with unescaped quotes inside is ONE string, balanced or not
+!(test (parse-reply "(final \"Dropout \"drops\" units\")") (final "Dropout \"drops\" units"))
+!(test (parse-reply "Here: (final \"a 5\" screen\")") (final "a 5\" screen"))
+!(test (parse-reply "(ask-user \"which \"file\"?\")") (ask-user "which \"file\"?"))
 !(test (check-proposal (final "42")) (final "42"))
 !(test (check-proposal (ask-user "which file?")) (ask-user "which file?"))
 !(test (check-proposal (action calc)) (invalid bad-shape))

@@ -23,7 +23,8 @@
 !(set-config context-fresh-chars 12000) ; the LATEST turn's results, shared between them: the model
                                      ; reads a fetched page once, in full, instead of 600 characters
                                      ; of it (which made it fetch the same page again and again)
-!(set-config context-verify-chars 4000) ; per step outcome in the VERIFY prompt (total capped in prompts.py)
+!(set-config context-verify-chars 4000) ; per step outcome in the VERIFY prompt, at least
+!(set-config context-verify-total 38000) ; shared between the steps (prompts.py caps the total at 40000)
 !(set-config context-older-steps 20) ; the older steps kept in short form (only these)
 !(set-config context-older-chars 120); max characters per short outcome
 !(set-config max-iterations 40)     ; turns (LLM calls) per goal; shown as PROGRESS, enforced by agent.metta
@@ -83,12 +84,24 @@
           ($summary (older-summary $cut)))
          (repr (union-atom $summary $recent))))
 
-; every step, for verification: evidence must not be windowed away. Outcomes get
-; context-verify-chars each (not 600): the model read whole pages, so the checker
-; must see them too, or it rejects correct answers as "unsupported".
+; every step, for verification: evidence must not be windowed away. The model
+; read whole pages, so the checker must see them too, or it rejects correct
+; answers as "unsupported" (seen: "2012" at character 5229 of a Wikipedia page
+; the agent read, refused because the checker saw only 4000 characters).
+; The semantic (LLM) check shares context-verify-total between the steps, at
+; least context-verify-chars each; prompts.py caps the total.
+(= (verify-budget)
+   (let* (($k (step-count))
+          ($share (if (> $k 0) (/ (config-value context-verify-total) $k) 0)))
+         (if (> $share (config-value context-verify-chars)) $share (config-value context-verify-chars))))
+
 (= (all-steps-repr)
-   (let $k (config-value context-verify-chars)
+   (let $k (verify-budget)
         (repr (sort-atom (collapse (match &wm (step $n $t $i $o) (fresh-view $n $t $i $o $k)))))))
+
+; the Python checks (layer 2) are code, not a prompt: they get every result whole
+(= (all-steps-full)
+   (repr (sort-atom (collapse (match &wm (step $n $t $i $o) ($n $t $i $o))))))
 
 ; only facts relevant to this goal (memory.metta ranks them), not the whole &kb
 (= (facts-repr) (repr (relevant-facts (goal-text))))

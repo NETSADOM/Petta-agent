@@ -231,21 +231,29 @@
 
 (= (do-actions $p $i) (after-calls (run-calls (cdr-atom $p) $i) $i))
 
-; → ran | (stop REASON); a batch stops at the first (stop ..)
+; → ran | (stop REASON) | (final "answer"); a batch stops at the first (stop ..)
 ; A batch may also close tasks: (actions (task-done t1) (action write-file "..."))
-; saves the separate task-done turn.
+; saves the separate task-done turn. It may END with (final "answer"): the
+; calls before it run first, then the final goes through do-final (verification)
+; as if it had come alone. Models write "(task-done t2) (final ..)" naturally
+; after a final was rejected for an open task; refusing it as a bad shape made
+; them repeat it until the run stopped.
 (= (run-calls $calls $i)
    (if (== $calls ())
        ran
        (let* (($c (car-atom $calls))
-              ($r (if (== (car-atom $c) task-done)
-                      (let $ids (cdr-atom $c)
-                           (let $rs (collapse (let $id (superpose $ids) (mark-done $id))) ran))
-                      (run-call (index-atom $c 1) (index-atom $c 2) $i))))
+              ($r (if (== (car-atom $c) final)
+                      $c                                   ; the rest of the batch is not run
+                      (if (== (car-atom $c) task-done)
+                          (let $ids (cdr-atom $c)
+                               (let $rs (collapse (let $id (superpose $ids) (mark-done $id))) ran))
+                          (run-call (index-atom $c 1) (index-atom $c 2) $i)))))
              (if (== $r ran) (run-calls (cdr-atom $calls) $i) $r))))
 
 (= (after-calls $r $i)
-   (if (== $r ran) (continue $i) (stopped (index-atom $r 1))))
+   (if (== $r ran)
+       (continue $i)
+       (if (== (car-atom $r) final) (do-final $r $i) (stopped (index-atom $r 1)))))
 
 ; A call that already failed twice in exactly this form is NOT run again: the
 ; model is told to change the input or the tool (recovery by doing something

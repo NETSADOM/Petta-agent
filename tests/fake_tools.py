@@ -316,3 +316,18 @@ def gpt_oss_replies_ok(_=None):
     ok = all(r.extract(t) == ["found", want] for t, want in cases.items())
     body = json.dumps({"error": {"code": "tool_use_failed", "failed_generation": '{"name": "now"}'}})
     return ok and o.failed_generation(400, body) == '{"name": "now"}' and o.failed_generation(401, body) == ""
+
+
+def write_raw(root, name, content):
+    """Put a file in the workspace WITHOUT write-file's checks (a broken file the
+    evidence check must catch)."""
+    import os
+    with open(os.path.join(str(root), str(name)), "w", encoding="utf-8") as f:
+        f.write(str(content))
+    return True
+
+
+def late_fact(n):
+    """A long page whose fact comes after n characters (past the old 4000-character
+    verification cut)."""
+    return "filler text " * (int(n) // 12) + "Dropout was introduced in 2012 by Hinton."

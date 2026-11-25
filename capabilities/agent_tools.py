@@ -330,6 +330,25 @@ def read_file(name):
     return ["ok", text[:MAX_READ] + ("\n...[file truncated]" if len(text) > MAX_READ else "")]
 
 
+# A model sometimes writes {{read_file_output}} or {{papers_output}}, expecting it
+# to be replaced by an earlier result. Nothing replaces it: the file would hold
+# the placeholder, and an overwrite would lose the text it stood for. Only names
+# that point at a result count, and template files (Jinja, Handlebars, ...) are
+# exempt, so a real template can still be written.
+PLACEHOLDER = re.compile(
+    r"\{\{\s*([\w.\- ]*(?:output|result|response|content|previous|existing|summar|text|file|data)[\w.\- ]*)\s*\}\}",
+    re.I)
+TEMPLATE_EXT = (".j2", ".jinja", ".jinja2", ".html", ".htm", ".hbs", ".mustache", ".tmpl", ".tpl", ".liquid")
+
+
+def placeholder_in(path, content):
+    """The first result placeholder in content, or None."""
+    if str(path).lower().endswith(TEMPLATE_EXT):
+        return None
+    m = PLACEHOLDER.search(str(content))
+    return m.group(0) if m else None
+
+
 def write_file(spec):
     try:
         data = json.loads(str(spec), strict=False)   # a model may put raw newlines in "content"
@@ -345,6 +364,11 @@ def write_file(spec):
         return ["error", str(e)]
     if os.path.isdir(path):
         return ["error", f"cannot write {data['path']}: it is a directory"]
+    hole = placeholder_in(name, content)
+    if hole:
+        return ["error", f"nothing written: the content contains the placeholder {hole}, and tools do "
+                         "not fill in placeholders. Put the actual text in content (to keep a file's "
+                         "old text, include all of it)."]
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:

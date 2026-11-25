@@ -96,6 +96,19 @@
 ; OpenAI-style {"tool_calls": [...]} with several calls → one (actions ..)
 !(test (parse-reply "{\"tool_calls\": [{\"tool\": \"calc\", \"input\": \"1\"}, {\"tool\": \"calc\", \"input\": \"2\"}]}")
        (actions (action calc "1") (action calc "2")))
+; input as an object with extras (gpt-oss): the command is taken, the extras dropped,
+; and a command list keeps its quoting (bash -lc 'python3 -m unittest')
+!(test (parse-reply "{\"tool\": \"run-shell\", \"input\": {\"cmd\": [\"bash\", \"-lc\", \"python3 -m unittest\"], \"timeout\": 60000}}")
+       (action run-shell "bash -lc 'python3 -m unittest'"))
+!(test (parse-reply "{\"tool\": \"read-file\", \"input\": {\"path\": \"a.md\", \"encoding\": \"utf-8\"}}") (action read-file "a.md"))
+; write-file's own JSON stays whole
+!(test (parse-reply "{\"tool\": \"write-file\", \"input\": {\"path\": \"a.md\", \"content\": \"hi\"}}")
+       (action write-file "{\"path\": \"a.md\", \"content\": \"hi\"}"))
+; the input given next to the tool name, without an "input" key
+!(test (parse-reply "{\"tool\": \"run-shell\", \"cmd\": [\"ls\", \"-la\"]}") (action run-shell "ls -la"))
+; a harness namespace in front of the tool name is dropped; an empty object is no input
+!(test (parse-reply "{\"name\": \"repo_browser.list_files\", \"arguments\": {}}") (action list-files ""))
+!(test (parse-reply "{\"tool\": \"functions.calc\", \"input\": \"1+1\"}") (action calc "1+1"))
 
 ; ---------------- a whole agent run over HTTP, mixing JSON and S-expressions ----------------
 !(py-call (fake_openai.queue_replies

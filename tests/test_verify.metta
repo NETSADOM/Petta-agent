@@ -38,6 +38,18 @@
 !(declare-verifier fake_tools.broken_verifier)
 !(test (car-atom (car-atom (objective-problems "3"))) check-failed)
 !(remove-atom &caps (verifier fake_tools.broken_verifier))
+
+; the checks see what the agent READ, not a cut of it: a fact at character 6000
+; of a page (the old cut was 4000) counts as observed
+!(clear-wm)
+!(set-goal "dropout history")
+!(let $t (py-call (fake_tools.late_fact 6000)) (record-step http-get "https://w" (ok $t)))
+!(declare-verifier capability_checks.number_is_observed)
+!(test (objective-problems "introduced in 2012") ())
+!(test (car-atom (car-atom (objective-problems "introduced in 2013"))) check-failed)
+!(remove-atom &caps (verifier capability_checks.number_is_observed))
+; the semantic check shares its budget: one long step is shown whole
+!(test (py-call (fake_tools.has (all-steps-repr) "in 2012")) True)
 ; skill verifiers apply only when a task uses that skill
 !(declare-skill counting "count" (upper) (count))
 !(test (set-skill-verifier counting fake_tools.always_false) (verifier-declared counting fake_tools.always_false))

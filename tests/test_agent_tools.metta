@@ -43,6 +43,17 @@
 !(test (repr (py-call (agent_tools.write_file "{\"path\": \"empty.txt/x\", \"content\": \"x\"}"))) "(error cannot write empty.txt/x: a part of the path is a file, not a directory)")
 !(test (repr (py-call (agent_tools.write_file "{\"path\": \"/tmp/x\", \"content\": \"x\"}"))) "(error use a path relative to the workspace)")
 !(test (repr (py-call (agent_tools.write_file "{\"path\": \"sub/new.txt\", \"content\": \"made\"}"))) "(ok wrote 4 characters to sub/new.txt)")
+; a placeholder for an earlier result is refused: nothing fills it in, and an
+; overwrite would lose the text it stood for (seen with gpt-oss: {{read_file_output}})
+!(test (py-call (fake_tools.has (repr (py-call (agent_tools.write_file "{\"path\": \"sub/new.txt\", \"content\": \"{{read_file_output}}\\n3. more\"}"))) "placeholder {{read_file_output}}")) True)
+!(test (repr (py-call (agent_tools.read_file "sub/new.txt"))) "(ok made)")      ; the old text is kept
+; a real template may still use {{ }}, and so may text without a result name
+!(test (car-atom (py-call (agent_tools.write_file "{\"path\": \"page.html\", \"content\": \"<p>{{content}}</p>\"}"))) ok)
+!(test (car-atom (py-call (agent_tools.write_file "{\"path\": \"hello.md\", \"content\": \"Hi {{name}}\"}"))) ok)
+; the evidence check: a file the answer claims, holding a placeholder, is not done
+!(py-call (fake_tools.write_raw (py-call (agent_tools.workspace)) "holes.txt" "{{papers_output}}"))
+!(test (car-atom (py-call (capability_checks.claimed_files_exist "g" "I saved the summaries to holes.txt" ""))) error)
+!(test (py-call (capability_checks.claimed_files_exist "g" "I saved it to sub/new.txt" "")) True)
 !(test (repr (execute read-file "sub/new.txt")) "(ok made)")
 
 ; run-python works in the workspace too: it can open what read-file sees

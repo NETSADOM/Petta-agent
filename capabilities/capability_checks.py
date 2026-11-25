@@ -53,7 +53,7 @@ def claimed_files_exist(goal, answer, observations):
     must really exist in the workspace. A failed write-file is not a saved file."""
     import os
     import agent_tools
-    missing, text = [], str(answer)
+    missing, holes, text = [], [], str(answer)
     for m in CLAIMED_FILE.finditer(text):
         name = m.group(1)
         before = text[max(0, m.start() - 25):m.start()].lower()
@@ -62,12 +62,23 @@ def claimed_files_exist(goal, answer, observations):
         if re.search(r"\b(not|never|n't|could not|unable|failed to)\b|n't\b", before):
             continue                 # "was not saved to x.md": an honest report, not a claim
         try:
-            if not os.path.isfile(agent_tools._inside(name)):
+            path = agent_tools._inside(name)
+            if not os.path.isfile(path):
                 missing.append(name)
+                continue
+            with open(path, encoding="utf-8", errors="replace") as f:
+                hole = agent_tools.placeholder_in(name, f.read(500_000))
+            if hole and name not in holes:
+                holes.append(f"{name} ({hole})")
         except ValueError:          # outside the workspace: cannot have been written there
+            missing.append(name)
+        except OSError:
             missing.append(name)
     if missing:
         return ["error", "the answer says these files were written, but they do not exist in the "
                          "workspace: " + ", ".join(missing) + " - write them (and check the result) "
                          "or do not claim them"]
+    if holes:
+        return ["error", "these files contain a placeholder instead of the real text: "
+                         + ", ".join(holes) + " - write the complete text into them"]
     return True

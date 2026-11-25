@@ -33,7 +33,7 @@
 (= (proven $answer)
    (let $fs (conclusive-verifiers)                 ; bind before superpose (gotcha 2)
         (not (== (collapse (let* (($f (superpose $fs))
-                                  ($r (py-call (toolrunner.run_verifier $f (goal-text) $answer (all-steps-repr)))))
+                                  ($r (py-call (toolrunner.run_verifier $f (goal-text) $answer (all-steps-full)))))
                                  (if (== (car-atom $r) ok) yes (empty))))
                  ()))))
 
@@ -86,7 +86,7 @@
 (= (objective-problems $answer)
    (collapse (let* (($fs (active-verifiers))           ; bind before superpose (gotcha 2)
                     ($f (superpose $fs))
-                    ($r (py-call (toolrunner.run_verifier $f (goal-text) $answer (all-steps-repr)))))
+                    ($r (py-call (toolrunner.run_verifier $f (goal-text) $answer (all-steps-full)))))
                    (case $r
                          (((ok $x) (empty))
                           ; Python text is a Symbol → make it a real String (gotcha 14)

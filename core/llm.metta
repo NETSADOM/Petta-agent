@@ -91,13 +91,16 @@
        False))
 
 ; (actions (action T "in") ...) — several calls from one reply, run in order
-; a batch item: a call, or (task-done t1 ...) closing tasks in the same turn
+; a batch item: a call, (task-done t1 ...) closing tasks in the same turn, or
+; (final "answer") — it ends the batch (agent.metta run-calls)
 (= (batch-item-ok $c)
    (if (call-ok $c)
        True
        (if (and (is-expression $c) (and (> (size-atom $c) 1) (== (car-atom $c) task-done)))
            (== (task-ids-ok $c) $c)
-           False)))
+           (if (is-expression $c)
+               (and (== (car-atom $c) final) (== (size-atom $c) 2))
+               False))))
 (= (check-calls $p)
    (let $calls (cdr-atom $p)                ; bind first: superpose does not evaluate (gotcha 2)
         (if (== $calls ())
@@ -318,8 +321,29 @@
                ($err $err)))))
 
 (= (propose-next)
-   (let $r (ask-llm (py-call (prompts.act_system)) (act-request))
-        (case $r
-              (((ok $text) (check-proposal (parse-reply $text)))
-               ($err $err)))))
+   (let* (($req (act-request))
+          ($r (ask-llm (py-call (prompts.act_system)) $req)))
+         (case $r
+               (((ok $text) (let $p (check-proposal (parse-reply $text))
+                                 (if (unusable-reply $p) (repair-reply $req) $p)))
+                ($err $err)))))
+
+; A reply with no usable expression (markdown prose, a final with an unescaped
+; quote, an empty reply) is asked for AGAIN at once, showing the model what it
+; sent and the format. Before, it only saw "(invalid no-expression)" next turn,
+; repeated the mistake, and three in a row ended the run.
+; (config repair-replies on): the CLI sets it. Off in tests, where an extra call
+; would consume the next scripted reply.
+(= (unusable-reply $p)
+   (and (== (collapse (config-value repair-replies)) (on))
+        (or (== $p (invalid no-expression))
+            (or (== $p (invalid unparseable)) (== $p (invalid bad-shape))))))
+
+(= (repair-reply $req)
+   (let* (($shown (py-call (reply_parser.last_reply)))
+          ($s (emit (reply-repair $shown)))
+          ($r (ask-llm (py-call (prompts.act_system)) (py-call (prompts.act_retry $req $shown)))))
+         (case $r
+               (((ok $text) (check-proposal (parse-reply $text)))
+                ($err $err)))))
 

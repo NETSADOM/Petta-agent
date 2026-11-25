@@ -36,8 +36,8 @@ TASK: choose the next step. Reply with ONE of:
 (action TOOL "input")                 run a tool from the catalog
 (actions (action T1 "in") (task-done t1) (action T2 "in"))
                                       up to 5 INDEPENDENT items run in order this turn;
-                                      may close tasks too. Not for a call that needs
-                                      an earlier call's result.
+                                      may close tasks too, and may END with (final "answer").
+                                      Not for a call that needs an earlier call's result.
 (task-done ID ...)                    task(s) finished, based on observations
 (task-failed ID "why")                a task cannot be done (its dependents get blocked)
 (replan "why")                        the plan no longer fits
@@ -101,6 +101,22 @@ def plan_retry(request, rejected, why):
         "Rejected plan:", _data("rejected", cap(rejected, 2_000, "head")),
         "Why:", _data("why", cap(why, 500, "head")),
         "Dependencies must not form a cycle, and a task must not depend on itself.",
+    ])
+
+
+def act_retry(request, reply):
+    """The act request again, after a reply that could not be used: show the
+    model what it sent and the exact format, instead of a bare error next turn."""
+    return "\n".join([
+        str(request),
+        "YOUR PREVIOUS REPLY COULD NOT BE USED: it was not ONE S-expression of a form",
+        "listed in the instructions. It began:",
+        _data("unusable-reply", cap(reply, 500, "head")),
+        "Send it again as exactly ONE S-expression and nothing else - no markdown, no",
+        "text before or after it. E.g. (action write-file \"{\\\"path\\\": \\\"a.md\\\", \\\"content\\\": \\\"...\\\"}\")",
+        "or (final \"the complete answer\") - a final holds exactly ONE string - or",
+        "(actions (task-done t2) (final \"the answer\")). Inside a string, write \\\" for a",
+        "double quote and \\n for a new line. A long answer: save it with write-file, then a SHORT final.",
     ])
 
 

@@ -12,6 +12,7 @@
 
 !(set-config ui pretty)                ; render events with core/ui.py
 !(set-config fast-plan on)             ; short single-step goals skip the planning LLM call
+!(set-config repair-replies on)        ; an unusable reply is asked for again at once, with its format
 
 ; long-term memory file; PAGENT_KB overrides it (tests use their own file)
 (= (kb-path) (py-call (os.getenv "PAGENT_KB" "data/kb.metta")))

@@ -124,6 +124,8 @@ def render(event):
         _out(yellow("  ⚠ answer rejected by verification: ") + fmt(a[0], 200))
     elif kind == "gemini-reply":
         _out(dim(f"  · ignored unusable reply: {fmt(a[0])}"))
+    elif kind == "reply-repair":
+        _out(dim(f"  · unusable reply, asking again with the format: {fmt(a[0], 160)}"))
     elif kind == "gemini-error":
         _out(yellow(f"  ⚠ LLM error: {fmt(a[0])} — retrying"))
     elif kind == "sub-agent-start":

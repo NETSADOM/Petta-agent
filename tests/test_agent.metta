@@ -163,6 +163,35 @@
 !(use-script ("(plan (task t1 \"t\"))" "lol" "(dance)" "(action)" "(final \"x\")"))
 !(test (run-agent "x") (stopped too-many-invalid-replies))
 
+; ===== 10b. repair-replies on (the CLI): an unusable reply is asked for again AT ONCE =====
+!(set-config repair-replies on)
+!(use-script ("(plan (task t1 \"t\"))" "(task-done t1)" "## Papers\n**A** and **B**" "(final \"repaired\")"))
+!(test (run-agent "x") (done "repaired"))
+; no turn was lost: the prose never became a step
+!(test (collapse (match &wm (step $n gemini $i $o) $n)) ())
+; the second request showed the model what it sent and the format
+!(test (let $p (last-prompt) (py-call (.__contains__ $p "COULD NOT BE USED"))) True)
+!(test (let $p (last-prompt) (py-call (.__contains__ $p "## Papers"))) True)
+; still unusable after the repair: counted as before, 3 in a row stop the run
+!(use-script ("(plan (task t1 \"t\"))" "lol" "lol" "lol" "lol" "lol" "lol" "(final \"x\")"))
+!(test (run-agent "x") (stopped too-many-invalid-replies))
+; a wrong shape is asked for again too
+!(use-script ("(plan (task t1 \"t\"))" "(task-done t1)" "(action)" "(final \"reshaped\")"))
+!(test (run-agent "x") (done "reshaped"))
+!(set-config repair-replies off)
+
+; ===== 10c. a batch may END with a final: close the open task and answer in ONE reply =====
+; (what models send after a final was rejected for an open task)
+!(use-script ("(plan (task t1 \"get\") (task t2 \"summarize\" (after t1)))"
+              "(action raw \"x\")"
+              "(task-done t1 t2) (final \"both\")"))
+!(test (run-agent "x") (done "both"))
+; the final still goes through verification: an open task with failed work rejects it
+!(use-script ("(plan (task t1 \"t\"))" "(action ghost \"x\") (final \"too soon\")"
+              "(action raw \"x\")" "(final \"after work\")"))
+!(test (run-agent "x") (done "after work"))
+!(test (collapse (match &wm (step $n finish $a $o) $n)) (2))
+
 ; ===== 11. bad plan → sent back once to be corrected; still bad → continue without a plan =====
 !(use-script ("not a plan" "still not a plan" "(final \"fine\")"))
 !(test (run-agent "x") (done "fine"))
