@@ -62,11 +62,14 @@
 (= (offers $tool) (not (== (collapse (let $all (prompt-tool-catalog)
                                           (let $t (superpose $all) (if (== (car-atom $t) $tool) yes (empty)))))
                            ())))
+!(test (offers delegate) False)                ; off by default
+!(set-config delegate on)
 !(test (offers delegate) True)
 !(set-config agent-depth 1)
 !(test (offers delegate) False)
 !(test (offers upper) True)
 !(set-config agent-depth 0)
+!(set-config delegate off)
 
 ; ---------------- an approval you gave is remembered: a helper does not ask again ----------------
 ; stdin is /dev/null here, so ANY question would be answered "no".

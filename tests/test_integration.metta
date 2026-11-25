@@ -1,4 +1,4 @@
-; Phase 9 integration tests: complete workflows through the real pieces —
+; Integration tests: complete workflows through the real pieces —
 ; skills, plan, tools + gates, retry, memory, verification, the pretty renderer,
 ; and cancellation. Only Gemini is scripted.
 ; stdin: "y" approves the one approval request.

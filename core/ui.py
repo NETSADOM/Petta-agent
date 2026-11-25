@@ -215,7 +215,10 @@ def show_result(result):
     if kind == "done":
         _box(green("✔ verified answer"), r[1])
     elif kind == "done-unverified":
-        _box(yellow("⚠ answer NOT fully verified"), r[1])
+        _box(red("✗ INCOMPLETE - this answer could not be verified, so the goal is not done"), r[1])
+        _out(dim("  the checks kept failing (see the rejections above); treat it as a draft"))
+    elif kind == "blocked":
+        _box(yellow("■ BLOCKED - the goal needs information only you can give"), r[1])
     elif kind == "cancelled":
         _out(yellow("\n■ cancelled by you"))
     else:

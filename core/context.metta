@@ -23,6 +23,7 @@
 !(set-config context-fresh-chars 12000) ; the LATEST turn's results, shared between them: the model
                                      ; reads a fetched page once, in full, instead of 600 characters
                                      ; of it (which made it fetch the same page again and again)
+!(set-config context-verify-chars 4000) ; per step outcome in the VERIFY prompt (total capped in prompts.py)
 !(set-config context-older-steps 20) ; the older steps kept in short form (only these)
 !(set-config context-older-chars 120); max characters per short outcome
 !(set-config max-iterations 40)     ; turns (LLM calls) per goal; shown as PROGRESS, enforced by agent.metta
@@ -34,7 +35,7 @@
 ; clip a value for the prompt (display only — never stored)
 (= (clip-to $x $n)
    (if (> (py-call (toolrunner.length (repr $x))) $n)
-       (py-call (memory.shorten (repr $x) $n))
+       (py-call (text.shorten (repr $x) $n))
        $x))
 (= (clip $x) (clip-to $x (config-value context-obs-chars)))
 
@@ -82,18 +83,26 @@
           ($summary (older-summary $cut)))
          (repr (union-atom $summary $recent))))
 
-; every step (clipped), for verification: evidence must not be windowed away
+; every step, for verification: evidence must not be windowed away. Outcomes get
+; context-verify-chars each (not 600): the model read whole pages, so the checker
+; must see them too, or it rejects correct answers as "unsupported".
 (= (all-steps-repr)
-   (repr (sort-atom (collapse (match &wm (step $n $t $i $o) (step-view $n $t $i $o))))))
+   (let $k (config-value context-verify-chars)
+        (repr (sort-atom (collapse (match &wm (step $n $t $i $o) (fresh-view $n $t $i $o $k)))))))
 
 ; only facts relevant to this goal (memory.metta ranks them), not the whole &kb
 (= (facts-repr) (repr (relevant-facts (goal-text))))
 (= (episodes-repr) (repr (similar-episodes (goal-text))))
 
-; The tools the model is offered. A helper (agent-depth 1) cannot start another
-; helper, so delegate is not shown to it: offering it only wasted helper turns.
+; The tools the model is offered. delegate is shown only when (config delegate on)
+; and never to a helper (it cannot start another one). Off by default: a helper
+; re-plans and re-fetches everything, which made 40-turn goals slower, not faster.
+(= (offer-delegate)
+   (and (== (collapse (config-value delegate)) (on))
+        (not (== (collapse (config-value agent-depth)) (1)))))   ; unset agent-depth = main
+
 (= (prompt-tool-catalog)
-   (if (not (== (collapse (config-value agent-depth)) (1)))   ; unset (no agent loaded) = main
+   (if (offer-delegate)
        (tool-catalog)
        (let $all (tool-catalog)                        ; bind first: superpose does not evaluate
             (collapse (let $t (superpose $all)
@@ -120,7 +129,8 @@
    (py-call (prompts.act_prompt (goal-text) (tasks-repr) (current-task-repr) (steps-repr)
                                 (repr (prompt-tool-catalog)) (facts-repr) (repr (recovery-hints))
                                 (current-turn) (config-value max-iterations)
-                                (py-call (session.summary)) (repr (skill-catalog)))))
+                                (py-call (session.summary)) (repr (skill-catalog))
+                                (repr (note-list)))))
 
 ; size of what is sent each iteration (for measuring)
 (= (context-chars) (py-call (toolrunner.length (act-request))))

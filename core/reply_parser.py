@@ -21,9 +21,11 @@ from gemini import _first_sexpr
 
 
 def q(s):
-    """A MeTTa string literal. Newlines become spaces (one atom per line on disk)."""
-    s = " ".join(str(s).split()) if "\n" in str(s) else str(s)
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    """A MeTTa string literal with the content EXACTLY preserved: newlines and tabs
+    are escaped (sread turns \\n back into a newline), never flattened to spaces —
+    that broke Python code and changed the files write-file wrote."""
+    s = str(s).replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + s.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t") + '"'
 
 
 def sym(s):
@@ -58,7 +60,7 @@ def _first_json_object(text):
                 depth -= 1
                 if depth == 0:
                     try:
-                        return json.loads(text[start:i + 1])
+                        return json.loads(text[start:i + 1], strict=False)   # raw newlines in strings are common
                     except ValueError:
                         break
         start = text.find("{", start + 1)
@@ -102,10 +104,27 @@ def json_to_sexpr(d):
     tool = _get(d, "tool", "action", "name", "function")
     if isinstance(tool, dict):                     # {"function": {"name":.., "arguments":..}}
         d, tool = tool, _get(tool, "name")
+    args = _get(d, "arguments", "args", "parameters")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args, strict=False)
+        except ValueError:
+            pass
+    if str(tool).lower() in CHANNELS and isinstance(args, dict):
+        # gpt-oss names its output CHANNEL, the real call is inside:
+        # {"name": "commentary", "arguments": {"action": "read-skill", "input": "x"}}
+        return json_to_sexpr(args)
     if tool and str(tool).lower() not in ("final", "answer"):
         inp = _get(d, "input", "arguments", "args", "query", "parameters")
+        if isinstance(inp, str) and inp.lstrip().startswith("{"):
+            try:
+                inp = json.loads(inp, strict=False)
+            except ValueError:
+                pass
         if isinstance(inp, dict) and len(inp) == 1:
             inp = next(iter(inp.values()))
+        if isinstance(inp, list) and all(isinstance(x, str) for x in inp):
+            inp = inp[0] if len(inp) == 1 else " ".join(inp)   # {"cmd": ["ls", "-la"]}
         return f"(action {sym(tool)} {q(_value_text(inp if inp is not None else ''))})"
     final = _get(d, "final", "answer", "final_answer", "response")
     if final is not None:
@@ -119,6 +138,7 @@ def json_to_sexpr(d):
     return ""
 
 
+CHANNELS = ("commentary", "analysis", "assistant")   # gpt-oss channel names, not tools
 MAX_CALLS = 5          # tool calls run from one reply; more are dropped (told to the model)
 
 
@@ -138,7 +158,7 @@ def _first_json_value(text):
     t = re.sub(r"```[a-zA-Z]*", "", str(text)).strip()
     if t.startswith("["):
         try:
-            v = json.loads(t[:t.rindex("]") + 1])
+            v = json.loads(t[:t.rindex("]") + 1], strict=False)
             if isinstance(v, list):
                 return v
         except ValueError:

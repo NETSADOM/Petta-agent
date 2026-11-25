@@ -1,4 +1,4 @@
-; Phase 5 tests: tool registry, validation, limits, timeouts, permission gate, audit.
+; Tests: tool registry, validation, limits, timeouts, permission gate, audit.
 ; stdin (piped by run_tests.sh): "y" approves the one approval request below.
 
 !(import! &self ../core/agent)
@@ -57,7 +57,7 @@
 !(test (size-atom (collapse (match &wm (approval $t $i $y) $y))) 1)
 
 ; ---------------- gate 5: running ----------------
-!(set-config max-retries 0)     ; timeouts are retried since Phase 8; not needed here
+!(set-config max-retries 0)     ; timeouts are retried; not needed here
 !(test (repr (execute sleepy "x")) "(error timeout after 1s)")
 !(set-config max-retries 3)
 !(test (let (ok $v) (execute chatty "x") (py-call (.endswith $v "[truncated, 10000 chars]"))) True)

@@ -12,10 +12,12 @@
 !(declare-tool wiki-search "search Wikipedia; input is a short query like 'Lake Tana area'. Returns the best article's summary." safe agent_tools.wiki_search)
 !(set-tool-option wiki-search max-length 200)
 !(set-tool-option wiki-search timeout 25)
+!(set-tool-option wiki-search retries 1)
 
 !(declare-tool web-search "search the web (DuckDuckGo); input is a short query. Returns the top results: title, url and snippet. Use http-get on a url to read the page." safe agent_tools.web_search)
 !(set-tool-option web-search max-length 300)
 !(set-tool-option web-search timeout 25)
+!(set-tool-option web-search retries 1)
 
 !(declare-tool list-files "list the files in the workspace folder (input: anything)" safe agent_tools.list_files)
 !(set-tool-option list-files allow-empty yes)
@@ -39,14 +41,16 @@
 !(set-tool-option run-shell timeout 75)     ; > the 60s kill inside run_shell, so it reports first
 !(set-tool-option run-shell retry no)       ; a command with side effects must not run twice
 
-!(declare-tool http-get "GET a public http(s) URL (e.g. a JSON API or an article) and return the body as text; for a web page, only its readable text (menus, scripts and styles removed). If a page comes back unreadable or off-topic, use another search result instead of retrying it." needs-approval agent_tools.http_get)
+!(declare-tool http-get "GET a public http(s) URL; a web page comes back as its readable text. Binary files (PDF) are refused." needs-approval agent_tools.http_get)
 !(set-tool-option http-get pattern "https?://\\S+")
 !(set-tool-option http-get timeout 20)
+!(set-tool-option http-get retries 1)         ; one retry: a dead site costs 40 s, not 80
 !(set-tool-option http-get max-output 15000)   ; a page's readable text, not just its first lines
 !(set-tool-option http-get remember-approval yes) ; a GET is safe to repeat: approve a URL once per session
 
-!(declare-tool arxiv-search "search arXiv research papers; returns title, authors, date, url and the full ABSTRACT of each (no http-get needed). Input: search words, optionally starting with latest (newest first instead of most relevant), and | N for how many (1-10, default 5). A category like cs.LG (machine learning), cs.AI, cs.CL (NLP), cs.CV (vision), stat.ML is matched exactly. Examples: latest cs.LG | 5   or   vision transformers registers" safe agent_tools.arxiv_search)
+!(declare-tool arxiv-search "research papers with title, authors, date, url and full abstract (no http-get needed). Input: words, or latest + words for newest first; a category like cs.LG cs.AI cs.CL cs.CV stat.ML; | N for how many (default 5). E.g. latest cs.LG | 5" safe agent_tools.arxiv_search)
 !(set-tool-option arxiv-search timeout 30)
+!(set-tool-option arxiv-search retries 1)
 !(set-tool-option arxiv-search max-length 300)
 !(set-tool-option arxiv-search max-output 15000)
 
@@ -78,6 +82,10 @@
 !(declare-alternative wiki-search memory-search)
 !(declare-alternative wiki-search http-get)
 
+; ============================================================ evidence for every goal
+; a file the final answer says was saved must exist (a failed write-file is no file)
+!(declare-verifier capability_checks.claimed_files_exist)
+
 ; ============================================================ skills
 !(declare-skill research "find facts and answer factual questions"
                 (web-search wiki-search memory-search)
@@ -95,6 +103,7 @@
 !(set-skill-info math on-error "if calc rejects the input, rewrite it with only digits and + - * / ( ) and retry")
 !(set-skill-verifier math capability_checks.has_number)
 !(set-skill-verifier math capability_checks.computed_by_tool)   ; calc must have run
+!(set-conclusive-verifier math capability_checks.answer_is_tool_result) ; the answer IS calc's result: no semantic LLM check needed
 
 !(declare-skill file-analysis "answer questions about files in the workspace"
                 (list-files read-file)

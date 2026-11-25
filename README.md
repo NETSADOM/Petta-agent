@@ -55,13 +55,18 @@ Translated proposals go through exactly the same validation and gates.
 | `calc` | safe | AST evaluator, no `eval`; gate pattern allows only arithmetic |
 | `web-search` | safe | DuckDuckGo (lite page), no key: top 5 results as title, url, snippet; read a page with `http-get` |
 | `wiki-search` | safe | Wikipedia search + summary, no key |
-| `delegate` | safe | **core, sub-agent**: a helper agent does a self-contained sub-task in a fresh context (own plan, steps, `sub-agent-turns` 20) and returns its answer; the parent's working memory is restored; helpers can't start helpers |
+| `delegate` | safe | **core, sub-agent**: a helper agent does a self-contained sub-task in a fresh context (own plan, steps, `sub-agent-turns` 20) and returns its answer; the parent's working memory is restored; helpers can't start helpers and store no episodes. **Off by default** (`(config delegate on)` offers it to the model): a helper re-plans and re-fetches, which made 40-turn goals slower |
 | `list-files`, `read-file` | safe | only inside the workspace (`PAGENT_WORKSPACE`, default `workspace/`); `..` and absolute paths refused; missing file, directory, binary and empty files answered in words |
 | `write-file` | needs-approval | JSON `{"path", "content"}`, workspace only; bad JSON, bad path and OS errors (permission, path through a file) answered in words |
 | `run-python` | needs-approval | separate `python3 -I` process in the workspace folder, empty env (no keys), CPU/memory/file/process limits, 15 s |
 | `run-shell` | needs-approval | `sh` in the workspace, no stdin, env without `*KEY*/*TOKEN*/*SECRET*/*PASSWORD*`; returns exit code + stdout + stderr; non-zero exit → `(error ..)` with the output; after 60 s (`PAGENT_SHELL_TIMEOUT`) the whole process group is killed and the partial output returned; never retried |
 | `send-message` | safe | **core** (`core/agent.metta`): shows the user a message without waiting |
 | `ask-user` | safe | **core**: asks and waits for one line; EOF, Ctrl+C or no answer within 600 s (`PAGENT_ASK_TIMEOUT`, terminal only) → `(error "the user did not answer: ...")`. The `(ask-user "q")` reply is the same tool |
+| `http-get` | needs-approval | public http(s) only; private/loopback addresses refused, **also after redirects**. Web pages come back as readable text (head, scripts, styles, menus removed; the `<article>`/`<main>` part preferred); PDFs and other binary files are refused before downloading, and arXiv PDF links are fetched as their abstract page. An approved URL is not asked again in the session; `a` at the prompt allows every URL for the session |
+| `arxiv-search` | safe | arXiv API, no key: title, authors, date, link and full abstract of each paper in one call. `latest cs.LG \| 5` = the newest 5 machine-learning papers; plain words = most relevant |
+| `now` | safe | date and time |
+| `memory-search` | safe | **MeTTa tool**: queries the `&kb` AtomSpace (relevant facts + past tasks) |
+| `memory-store` | safe | **MeTTa tool**: `(capital kenya nairobi)` → `&kb`, through the same memory gates |
 
 **Every tool returns text.** Failures come back as `(error "why")`, which the
 agent reads as an observation, and they never crash it: `toolrunner` catches
@@ -70,13 +75,9 @@ times out hung tools, and reports an unknown tool as
 `(error (unknown-tool NAME (available ...)))`. Tests: `tests/test_agent_tools.metta`.
 Tool option `retry no` turns off automatic retries of temporary errors for
 tools with side effects (`run-shell`) or a person (`ask-user`, `send-message`).
-| `http-get` | needs-approval | public http(s) only; private/loopback addresses refused, **also after redirects** |
-| `now` | safe | date and time |
-| `memory-search` | safe | **MeTTa tool**: queries the `&kb` AtomSpace (relevant facts + past tasks) |
-| `memory-store` | safe | **MeTTa tool**: `(capital kenya nairobi)` → `&kb`, through the same memory gates |
 
 Skills: `research`, `math`, `file-analysis`, `data-analysis`, `coding`, `shell`,
-`summarization` — each with tools, keywords, procedure, expected output and
+`summarization`, `papers` (plus the folder skill `skills/code-review`) — each with tools, keywords, procedure, expected output and
 error strategy; `research` and `math` have objective verifiers
 (`capability_checks.py`: numbers in the answer must appear in observations /
 a math answer must contain a number).
@@ -87,19 +88,30 @@ query any AtomSpace. Add your own tools and skills in `my_capabilities.metta`.
 
 ## Context (`core/context.metta`)
 
+**Planning.** The CLI sets `(config fast-plan on)`: a short goal with no list of
+steps (at most 12 words, no "and"/"then"/commas, e.g. "what is 15 percent of
+2480") gets a one-task plan with its best-matching skill, **without** a planning
+LLM call. Longer goals are planned by the model, asked for the fewest tasks
+(usually 1-3, one per kind of work). A batch may close tasks in the same turn:
+`(actions (task-done t1) (action write-file "..."))`.
+
 PeTTa builds every prompt from the AtomSpaces: goal, plan + current task with
 its skill guide, steps, tool/skill catalogs, relevant skills, **relevant**
 facts from `&kb`, similar past tasks, recovery hints, and
 `PROGRESS: turn N of 40` (with "FEW TURNS LEFT: finish now" in the last 3).
 Steps are **windowed**: the last `context-steps` (8) in full, each clipped to
-`context-obs-chars` (600); the `context-older-steps` (20) before them in
+`context-obs-chars` (600), except the steps of the **latest turn**, which share
+`context-fresh-chars` (12 000) so a fetched page is read once, in full; the `context-older-steps` (20) before them in
 **short form** (`context-older-chars`, 120), so what turn 3 found is still
 visible at turn 25; anything older only counted in
-`(earlier-steps 22 ok 18 failed 4 (failed-tools (flaky)))`. Last line of
-defence: `prompts.STEPS_MAX` caps the history in any prompt at 16 000
-characters (newest kept), facts at 3 000. Tool output is cut at `max-output`
-before it is even stored. Stored data is never clipped, and verification
-always sees every step.
+`(earlier-steps 22 ok 18 failed 4 (failed-tools (flaky)))`. **Every
+section of every prompt is capped** in `prompts.py`: goal 2 000, session 1 500,
+plan 2 000, current task + skill guides 9 000, skill list 2 500, notebook 4 500,
+step history 28 000 (newest kept), recovery hints 1 500, tool catalog 5 000,
+facts 3 000; the verify prompt's evidence 40 000 and answer 8 000. The act
+prompt can never exceed about 60 000 characters, whatever the input. Tool output
+is cut at `max-output` before it is even stored. Stored data is never clipped,
+and verification sees every step (up to 4 000 characters of each).
 
 **Measured** (tests/test_context.metta): a 30-step run with 1 000-character
 observations: 17 135 characters with every step in full (already capped by
@@ -129,13 +141,11 @@ core/agent.metta        THE LOOP: propose → validate → permit → execute �
 core/io_helper.py       console input (confirm y/N, read goal) + the send-message / ask-user tools
 core/session.py         the last 5 goals of this CLI session (shown to the model)
 core/tools.metta        tool registry, input validation, limits, permission gate
-core/toolrunner.py      runs a tool with timeout + output cap, writes data/audit.jsonl
+core/toolrunner.py      runs a tool with timeout + output cap, writes data/audit.jsonl; error classes + backoff
 core/skills.metta       skill registry + discovery (keyword scoring, availability)
-core/text.py            word matching helper
+core/text.py            text helpers: skill matching, memory sensitivity filter + relevance, notebook parsing
 core/memory.metta       selective learning, episodes, relevant recall, size limit
-core/memory.py          sensitivity filter, word-overlap scoring
 core/recovery.metta     error classes, retry, alternatives, hints, learned fixes
-core/recovery.py        temporary/permanent classifier, backoff sleep
 core/verify.metta       3-layer verification of final answers
 core/ui.py              CLI renderer (the only file that decides how output looks), cancel check
 main.metta              CLI:  sh run.sh main.metta
@@ -222,8 +232,13 @@ can do next.
 **Approval.** Tools are `safe` or `needs-approval`; a `needs-approval` tool
 may declare `auto-approve module.fn` for inputs that cannot do damage:
 `run-shell` runs read-only commands (`ls`, `cat`, `grep`, `git status`, pipes
-of these, ...) at once and asks `[y/N]` for everything else (an allow-list:
-`rm`, `mv`, redirects `>`, `$(...)`, scripts, `git push` ... all ask).
+of these, ...) at once and asks `[y/N]` for everything else. It is an
+allow-list of commands **and options**: `rm`, `mv`, redirects `>`, `$(...)`,
+scripts, `git push` all ask, and so do read-only programs used with an option or
+operand that writes or runs something (`git diff --output=f`,
+`git branch --delete=x`, `git branch NEW`, `git -c ...`, `sort -o f`,
+`tree -o f`, `file -C`, `rg --pre`, `uniq IN OUT`, `date -s`). An unknown
+option of `git branch`/`tag`/`remote` asks too.
 `write-file` creates new files at once and asks before overwriting one. With no
 terminal (EOF) the answer is **no**.
 
@@ -306,7 +321,7 @@ Planning and acting are separate prompts:
 
 | Call | Gemini may answer | Checked by |
 |---|---|---|
-| `(make-plan)` | `(plan (task t1 "..") (task t2 ".." (after t1)))` | `check-plan`: shape, unique ids, dependencies exist |
+| `(make-plan)` | `(plan (task t1 "..") (task t2 ".." (after t1)))` | `check-plan`: shape, unique ids, dependencies exist, **no self-dependency, no cycle**; a rejected plan is sent back once with the reason to be corrected |
 | `(propose-next)` | `(action TOOL "in")` / `(final "..")` / `(ask-user "..")` | `check-proposal`: shape, tool is declared |
 
 Anything else becomes `(invalid REASON)` and is never executed. Errors come
@@ -331,9 +346,10 @@ agent-loop(i): i > max-iterations → (stopped (iteration-limit (progress ...)))
   (task-done id)  mark completed (unknown id → error step)
   (task-failed id why)  failed; dependents (transitively) → blocked
   (replan why)    fresh plan with steps so far (max-replans 2)
-  (missing-capability what)  remembered in &kb as (capability-gap what) for you
+  (missing-capability what)  remembered in &kb as (capability-gap what) for you (gated like every memory write)
   (ask-user q)    = (action ask-user q) → step
-  (final a)       accepted only if (all-done); rejected twice → (done-unverified a)
+  (final a)       accepted only if every task is resolved and verification passes;
+                  rejected twice → (done-unverified a), shown as INCOMPLETE
   (invalid ..)    recorded so Gemini sees it; 3 IN A ROW → (stopped too-many-invalid-replies)
   (error k m)     temporary → next iteration (3 in a row → stop); permanent → stop now
 ```
@@ -344,7 +360,28 @@ end it. Test: `tests/test_long_task.metta` (27 turns: a batch, an unknown tool,
 a failure and a different retry; the goal and the turn-1 finding are still in
 the turn-27 prompt).
 
-Results: `(done "a")`, `(done-unverified "a")`, `(stopped REASON)`.
+Results: `(done "a")`; `(blocked "a")` when a question went unanswered and the
+answer reports what is blocked (open tasks become `blocked`); `(done-unverified "a")`
+— **incomplete**: never stored as a success, an error for a parent agent;
+`(stopped REASON)`.
+
+**Evidence.** Each call is tied to its task (`(step-task N TASK)`). A task whose
+work-tool calls *all* failed cannot be marked done (`(error (no-evidence ...))`)
+and is not closed by a final answer: fix it or `(task-failed ID "why")`. Failed
+and blocked tasks count as resolved, never as completed. The global verifier
+`claimed_files_exist` rejects an answer that says a file was saved when it is
+not in the workspace, and the semantic checker is told that an `(error ...)`
+outcome is no evidence of success.
+
+**No guessing.** An unanswered question becomes a `blocker` note; a final answer
+that ignores it (uses a value instead of reporting the blocker) is rejected
+with `guessing-instead-of-asking`.
+
+**Notebook.** The core tool `note` keeps `(note ID KIND "text")` atoms — KIND
+`found`, `file`, `decision`, `todo`, `blocker`; `drop: nN` removes one — shown
+in every act prompt while old steps get shortened. Bounded: `note-max` 15 notes
+of ≤ 250 characters; when full, the oldest `found` note makes room. Successful
+`write-file` calls and unanswered questions are noted automatically.
 Every step is an atom `(step N TOOL INPUT OUTCOME)` in `&wm`, and every
 approval decision is `(approval TOOL INPUT true|false)`.
 
@@ -424,8 +461,12 @@ fences. Files read with `read-skill NAME/FILE` come back as a tool result
   password/secret/token words, emails, card numbers, long tokens). All
   problems are reported: `(error (rejected (low-confidence (sensitive email))))`.
 - an **episode** `(episode "goal" (tools t ...) "answer")` after a run that ended
-  `done` (conf 0.8) or `done-unverified` (0.4). Stopped runs leave nothing.
-  The same goal replaces its old episode.
+  `done` (conf 0.8), goal and answer shortened to fit. Unverified, blocked and
+  stopped runs leave nothing, and helpers store none. The same goal replaces its
+  old episode.
+- **Every** write — learned facts, episodes, recovery fixes, capability gaps —
+  goes through the same gates (`learn-fact`: structure, confidence, size,
+  sensitivity) and pruning: a goal containing an email is not stored.
 
 **Dedup:** one fact per content; learning it again updates source/time/confidence.
 
@@ -455,7 +496,7 @@ only as trustworthy as Gemini's judgement — they are tagged `source gemini`.
 | Gemini errors | temporary → back off `llm-backoff × attempt` s, max 3; permanent (bad key...) → stop at once |
 | loop guards | same call failed twice → refused with advice, 3 refusals → stop; `max-iterations`; `max-invalid` (in a row); `max-replans` |
 
-Config: `max-retries 3`, `retry-backoff 0.5`, `llm-backoff 2`.
+Config: `max-retries 3`, `retry-backoff 0.5`, `llm-backoff 2`. Tool option `retries` overrides `max-retries` per tool: the web tools use 1 (a site that timed out rarely answers the next time). A learned fix `(fix (fails TOOL CLASS) (use OTHER))` is kept only when OTHER is a work tool (not `send-message`, `read-skill`, `memory-*` …) that succeeded within 3 steps of the failure.
 
 ## Verification (`core/verify.metta`)
 
@@ -465,11 +506,12 @@ A `(final ..)` is accepted only if every layer passes, in order:
 |---|---|---|---|
 | 1 symbolic | PeTTa | all plan tasks completed; answer not empty | proves the *process* ran, not that the answer is true |
 | 2 objective | your Python checks | `fn(goal, answer, observations)`; global (`declare-verifier`) or per skill (`set-skill-verifier`); crash/timeout = fail | only as good as the checks you write |
-| 3 semantic | a **separate** Gemini call | "do the observations support the answer?" — told not to use its own knowledge | an LLM judging an LLM can be fooled; costs 1 call; unreachable/unreadable → `unknown` (not blocking) |
+| 3 semantic | a **separate** LLM call | "do the observations support the answer?" — told not to use its own knowledge | an LLM judging an LLM can be fooled; costs 1 call; unreachable/unreadable → `unknown` (not blocking). **Skipped** when a conclusive check already proved the answer (`set-conclusive-verifier`; math: the answer states calc's result) |
 
-A layer that fails stops the chain (no wasted Gemini call). The failure goes
-back to Gemini as `(error (verification-failed (...)))`; after
-`max-final-rejections` (2) the answer is returned as `done-unverified`.
+A layer that fails stops the chain (no wasted LLM call). The failure goes
+back to the model as `(error (verification-failed (...)))`; after
+`max-final-rejections` (2) the answer is returned as `done-unverified`, which
+counts as incomplete.
 Each layer's result is stored: `(verification ROUND LAYER RESULT)`.
 `use-script` turns layer 3 off (it would eat a scripted reply).
 
@@ -594,9 +636,10 @@ The key is never written into error messages.
 - [x] The agent decides it is done (verified final) and tells the user
 - [x] Long tasks (40 turns, tested with 27), recovery by changing approach, stuck report
 - [x] Several goals in one session without a restart; bounded prompt
-- [x] Ask instead of guessing; shell timeout; approval for destructive commands
+- [x] Ask instead of guessing (unanswered → blocked, never invented); shell timeout; approval for destructive commands and options
+- [x] Evidence before success; notebook for long tasks; gated memory; acyclic plans; every prompt section bounded
 - [x] Extra: sub-agents (`delegate`), web search
-- [x] 520+ offline checks (`sh tests/run_tests.sh`), offline evaluation 45/50 (100 % on every safety category)
+- [x] 670+ offline checks (`sh tests/run_tests.sh`), offline evaluation 45/50 (100 % on every safety category)
 - [x] Live model check (`tests/test_llm_live.metta`) with `gemini-3.8-flash`
 - [ ] Logs of 3 real tasks: `sh scripts/record_logs.sh` (needs a model with enough quota: the Gemini free tier allows only 20 requests per model per day, a full session needs about 100)
 - [ ] Live evaluation: `sh eval/run_eval.sh` with a key set

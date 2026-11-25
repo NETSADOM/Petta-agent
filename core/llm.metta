@@ -19,7 +19,7 @@
 
 ; ---------------- raw call ----------------
 ; → (ok "text") | (error KIND "message")
-; The "brain" is Gemini, unless (config brain scripted) is set: then replies are
+; The "brain" is the configured LLM, unless (config brain scripted) is set: then replies are
 ; replayed from &script — used by tests, and the rest of the pipeline is identical.
 (= (ask-llm $system $prompt)
    (if (== (collapse (config-value brain)) (scripted))
@@ -91,11 +91,18 @@
        False))
 
 ; (actions (action T "in") ...) — several calls from one reply, run in order
+; a batch item: a call, or (task-done t1 ...) closing tasks in the same turn
+(= (batch-item-ok $c)
+   (if (call-ok $c)
+       True
+       (if (and (is-expression $c) (and (> (size-atom $c) 1) (== (car-atom $c) task-done)))
+           (== (task-ids-ok $c) $c)
+           False)))
 (= (check-calls $p)
    (let $calls (cdr-atom $p)                ; bind first: superpose does not evaluate (gotcha 2)
         (if (== $calls ())
             (invalid bad-shape)
-            (if (== (collapse (let $c (superpose $calls) (if (call-ok $c) (empty) bad))) ())
+            (if (== (collapse (let $c (superpose $calls) (if (batch-item-ok $c) (empty) bad))) ())
                 $p
                 (invalid bad-shape)))))
 
@@ -189,6 +196,54 @@
                             (if (is-member $d $ids) (empty) $d)))
             ())))
 
+; ---------------- dependencies must form a DAG ----------------
+; (after t1) inside t1, or t1 → t2 → t1: such tasks could never become ready,
+; and the run would stall on them. Detected here, before anything is loaded.
+;   dep map: ((t1 ()) (t2 (t1)) ...)
+(= (dep-map $p) (map-atom (plan-tasks $p) $t ((task-id $t) (task-deps $t))))
+
+(= (deps-of $id $map)
+   (let $hits (collapse (let $e (superpose $map) (if (== (index-atom $e 0) $id) (index-atom $e 1) (empty))))
+        (if (== $hits ()) () (car-atom $hits))))
+
+; can $from reach $target by following dependencies? ($k bounds the depth)
+(= (reaches $from $target $map $k)
+   (if (<= $k 0)
+       False
+       (let $ds (deps-of $from $map)
+            (if (== (collapse (let $d (superpose $ds) (if (== $d $target) yes (empty)))) ())
+                (any-reaches $ds $target $map (- $k 1))
+                True))))
+
+(= (any-reaches $ds $target $map $k)
+   (if (== $ds ())
+       False
+       (if (reaches (car-atom $ds) $target $map $k)
+           True
+           (any-reaches (cdr-atom $ds) $target $map $k))))
+
+(= (self-dependent $p)
+   (let $map (dep-map $p)
+        (collapse (let $e (superpose $map)
+                       (let ($id $ds) $e
+                            (if (== (collapse (let $d (superpose $ds) (if (== $d $id) yes (empty)))) ())
+                                (empty) $id))))))
+
+(= (cyclic-tasks $p)
+   (let* (($map (dep-map $p))
+          ($n (size-atom $map))
+          ($ids (plan-ids $p)))
+         (collapse (let $id (superpose $ids) (if (reaches $id $id $map $n) $id (empty))))))
+
+(= (check-deps $p)
+   (let $self (self-dependent $p)
+        (if (not (== $self ()))
+            (invalid (self-dependency $self "a task cannot come after itself"))
+            (let $cyc (cyclic-tasks $p)
+                 (if (== $cyc ())
+                     $p
+                     (invalid (dependency-cycle $cyc "these tasks wait for each other in a circle, so none could ever start")))))))
+
 (= (check-plan $p)
    (if (and (is-expression $p) (== (car-atom $p) plan))
        (let $tasks (plan-tasks $p)
@@ -198,7 +253,7 @@
                                        (if (task-shape-ok $t) (empty) bad)))
                         ())
                     (if (== (size-atom (unique-atom (plan-ids $p))) (size-atom $tasks))
-                        (if (deps-known $p) $p (invalid unknown-dependency))
+                        (if (deps-known $p) (check-deps $p) (invalid unknown-dependency))
                         (invalid duplicate-ids))
                     (invalid bad-task))))
        (invalid not-a-plan)))
@@ -231,12 +286,35 @@
 !(import! &self context)
 
 ; ---------------- the two calls ----------------
+; A short, single-step goal ("what is 15 percent of 2480") gets a one-task plan
+; WITHOUT an LLM call: planning it cost a whole call and added nothing. On only
+; when (config fast-plan on) — the CLI sets it; tests script their plans.
+(= (fast-plan-for $goal)
+   (let $top (top-skills $goal)
+        (if (== $top ())
+            (plan (task t1 $goal))
+            (let $s (car-atom $top) (plan (task t1 $goal (uses $s)))))))
+
 (= (make-plan)
-   (let $r (ask-llm (py-call (prompts.plan_system)) (plan-request))
+   (if (and (== (collapse (config-value fast-plan)) (on))
+            (py-call (text.is_simple_goal (goal-text))))
+       (let $p (fast-plan-for (goal-text)) (planned (load-plan $p)))
+       (llm-plan)))
+
+; An invalid plan (a cycle, a self-dependency, a bad shape) goes BACK to the model
+; once, with the reason, to be corrected — instead of working without a plan.
+(= (llm-plan) (llm-plan-with (plan-request) 1))
+
+(= (llm-plan-with $request $attempt)
+   (let $r (ask-llm (py-call (prompts.plan_system)) $request)
         (case $r
               (((ok $text)
                   (let $p (check-plan (parse-reply $text))
-                       (if (== (car-atom $p) invalid) $p (planned (load-plan $p)))))
+                       (if (== (car-atom $p) invalid)
+                           (if (< $attempt 2)
+                               (llm-plan-with (py-call (prompts.plan_retry $request $text (repr $p))) (+ $attempt 1))
+                               $p)
+                           (planned (load-plan $p)))))
                ($err $err)))))
 
 (= (propose-next)

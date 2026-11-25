@@ -28,3 +28,46 @@ def number_is_observed(goal, answer, observations):
         if float(n) > 10 and n not in seen:
             return ["error", f"{n} does not appear in any observation"]
     return True
+
+
+# (N calc "expr" (ok VALUE)) in the observations → VALUE
+CALC_RESULT = re.compile(r'\(\d+ calc "(?:[^"\\]|\\.)*" \(ok "?(-?\d+(?:\.\d+)?)')
+
+
+def answer_is_tool_result(goal, answer, observations):
+    """CONCLUSIVE check for math: the answer states a number that calc returned.
+    Then a second LLM call asking "is this supported?" adds nothing."""
+    results = {float(v) for v in CALC_RESULT.findall(str(observations))}
+    said = {float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", str(answer).replace(",", ""))}
+    return bool(results & said)
+
+
+# "saved the summary to report.md", "wrote notes/a.txt", "created out.csv"
+CLAIMED_FILE = re.compile(
+    r"\b(?:saved|wrote|written|created|stored|generated|exported)\b[^.\n]{0,60}?"
+    r"[`'\"]?([\w][\w./-]*\.[A-Za-z0-9]{1,6})\b", re.I)
+
+
+def claimed_files_exist(goal, answer, observations):
+    """EVIDENCE for every goal: a file the answer says was saved/written/created
+    must really exist in the workspace. A failed write-file is not a saved file."""
+    import os
+    import agent_tools
+    missing, text = [], str(answer)
+    for m in CLAIMED_FILE.finditer(text):
+        name = m.group(1)
+        before = text[max(0, m.start() - 25):m.start()].lower()
+        if "://" in name or name.lower().startswith("www.") or name in missing:
+            continue
+        if re.search(r"\b(not|never|n't|could not|unable|failed to)\b|n't\b", before):
+            continue                 # "was not saved to x.md": an honest report, not a claim
+        try:
+            if not os.path.isfile(agent_tools._inside(name)):
+                missing.append(name)
+        except ValueError:          # outside the workspace: cannot have been written there
+            missing.append(name)
+    if missing:
+        return ["error", "the answer says these files were written, but they do not exist in the "
+                         "workspace: " + ", ".join(missing) + " - write them (and check the result) "
+                         "or do not claim them"]
+    return True

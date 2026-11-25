@@ -1,4 +1,4 @@
-; Phase 3 offline tests: no network, no API key needed.
+; Offline tests: no network, no API key needed.
 ; Uses canned "Gemini replies" to test parsing, validation and plan loading.
 
 !(import! &self ../core/schema)
@@ -68,7 +68,7 @@
 !(remember (capital france paris) user 0.9)
 !(test (py-call (operator.contains (plan-request) "what is 2+3")) True)
 !(test (py-call (operator.contains (plan-request) "web-search")) True)
-; Phase 7: only RELEVANT facts reach Gemini
+; only RELEVANT facts reach the model
 !(test (py-call (operator.contains (act-request) "capital france paris")) False)
 !(set-goal "what is the capital of france")
 !(test (py-call (operator.contains (act-request) "capital france paris")) True)

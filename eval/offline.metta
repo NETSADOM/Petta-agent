@@ -147,7 +147,7 @@
 
 ; ===================== 6. sensitivity filter =====================
 (= (filter-case $cat $text $expect)
-   (let $got (py-call (memory.is_sensitive $text))
+   (let $got (py-call (text.is_sensitive $text))
         (rec $cat $text (== $got $expect) (flagged $got))))
 !(filter-case secrets-caught "my password is hunter2" True)
 !(filter-case secrets-caught "AIzaSyD-abcdefghijklmnopqrstuvwxyz12" True)

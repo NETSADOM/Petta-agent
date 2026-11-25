@@ -46,7 +46,7 @@
 
 (= (skill-available $s) (== (missing-tools $s) ()))
 
-; What gets shown to Gemini later: ((name "desc" level) ...)
+; What gets shown to the model later: ((name "desc" level) ...)
 (= (tool-catalog) (collapse (match &caps (tool $n $d $l) ($n $d $l))))
 (= (skill-catalog)
    (collapse (let $s (match &caps (skill $n $d) ($n $d))
@@ -129,9 +129,15 @@
    (collapse (let $id (match &wm (task $x $d pending) $x)
                   (if (is-ready $id) $id (empty)))))
 
+; RESOLVED = completed, or honestly given up: failed (task-failed) / blocked (a
+; dependency failed) / cancelled. A failed task is never "completed", but it no
+; longer blocks a final answer that REPORTS the failure.
+(= (resolved-status $s)
+   (or (or (== $s completed) (== $s cancelled)) (or (== $s failed) (== $s blocked))))
+
 (= (all-done)
    (== (collapse (let $s (match &wm (task $x $d $st) $st)
-                      (if (or (== $s completed) (== $s cancelled)) (empty) $s)))
+                      (if (resolved-status $s) (empty) $s)))
        ()))
 
 ; Steps (the tool history)
@@ -160,7 +166,7 @@
 (= (stuck $tool $input)
    (>= (size-atom (collapse (match &wm (step $n $tool $input (error $e)) $n))) 2))
 
-; ---------------- task selection (Phase 6) ----------------
+; ---------------- task selection ----------------
 ; Sequential for now: one current task. (ready-tasks) already returns every
 ; task that could run, so parallel execution can be added on top later.
 
@@ -199,12 +205,26 @@
 ; Defined here, the base layer, so no module depends on a later one
 ; (PeTTa compiles in load order: a rule used before it is defined is just a symbol).
 (= (tool-known $t) (not (== (collapse (tool-level $t)) ())))
+
+; A tool that does the WORK of a task. Tools that talk, plan or use memory are
+; not: they never count as the fix for a failed tool ("write-file failed, then
+; read-skill worked") nor as an episode's useful tools. Defined here, in the
+; first file loaded, so memory.metta and recovery.metta both see it as a function.
+(work-tool-exception send-message)
+(work-tool-exception ask-user)
+(work-tool-exception read-skill)
+(work-tool-exception delegate)
+(work-tool-exception memory-search)
+(work-tool-exception memory-store)
+(work-tool-exception now)
+(= (work-tool $t)
+   (and (tool-known $t) (== (collapse (match &self (work-tool-exception $t) yes)) ())))
 (= (goal-text) (match &wm (goal $g) $g))
 
 ; tasks not completed or cancelled (moved here from agent.metta: verify.metta uses it)
 (= (open-tasks)
    (collapse (match &wm (task $id $d $s)
-                    (if (or (== $s completed) (== $s cancelled)) (empty) $id))))
+                    (if (resolved-status $s) (empty) $id))))
 
 ; ---------------- output: the core never prints directly ----------------
 ; (emit EVENT) → (config ui pretty): core/ui.py renders it (the CLI)

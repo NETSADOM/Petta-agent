@@ -25,14 +25,6 @@ import urllib.request
 
 DEFAULT_BASE = "https://api.openai.com/v1"
 
-# token usage reported by the provider, summed over this process (for measuring)
-TOKENS = {"calls": 0, "prompt": 0, "completion": 0}
-
-
-def token_usage(_=None):
-    return [TOKENS["calls"], TOKENS["prompt"], TOKENS["completion"]]
-
-
 def base_url():
     return os.environ.get("OPENAI_BASE_URL", DEFAULT_BASE).rstrip("/")
 
@@ -107,6 +99,21 @@ def wait_hint(headers, text):
     return secs
 
 
+def failed_generation(code, text):
+    """Groq answers 400 tool_use_failed when a model (gpt-oss) replies in its native
+    tool-call format, which this client does not use. The reply itself is in
+    failed_generation: it is the model's answer, so it is used as the reply text
+    (reply_parser turns {"name": ..., "arguments": ...} into an action)."""
+    if code != 400 or "tool_use_failed" not in str(text):
+        return ""
+    try:
+        err = json.loads(text).get("error") or {}
+    except ValueError:
+        return ""
+    gen = err.get("failed_generation")
+    return gen.strip() if isinstance(gen, str) else ""
+
+
 def name_of_limit(text):
     t = str(text).lower()
     if "per day" in t or "(tpd)" in t or "(rpd)" in t:
@@ -176,6 +183,9 @@ def _generate_once(system, prompt):
             data = json.load(r)
     except urllib.error.HTTPError as e:
         text = e.read().decode("utf-8", "replace")
+        recovered = failed_generation(e.code, text)
+        if recovered:
+            return ["ok", recovered]
         kind = _classify(e.code, text)
         out = ["error", kind, f"HTTP {e.code}: {_short(text)}"]
         if kind == "rate-limit":
@@ -186,10 +196,6 @@ def _generate_once(system, prompt):
     except ValueError:
         return ["error", "server", "reply was not JSON"]
 
-    usage = data.get("usage") or {}
-    TOKENS["calls"] += 1
-    TOKENS["prompt"] += int(usage.get("prompt_tokens") or 0)
-    TOKENS["completion"] += int(usage.get("completion_tokens") or 0)
     choices = data.get("choices") or []
     if not choices:
         return ["error", "blocked", f"no choices in reply: {_short(json.dumps(data))}"]

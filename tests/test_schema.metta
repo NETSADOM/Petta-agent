@@ -1,4 +1,4 @@
-; Phase 2 tests: the knowledge schema and the reasoning rules over it.
+; Tests: the knowledge schema and the reasoning rules over it.
 
 !(import! &self ../core/store)
 !(import! &self ../core/schema)

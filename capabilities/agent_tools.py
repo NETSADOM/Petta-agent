@@ -32,7 +32,6 @@ import os
 import re
 import socket
 import subprocess
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -333,7 +332,7 @@ def read_file(name):
 
 def write_file(spec):
     try:
-        data = json.loads(str(spec))
+        data = json.loads(str(spec), strict=False)   # a model may put raw newlines in "content"
         if not isinstance(data, dict):
             raise TypeError("not a JSON object")
         name, content = data["path"], data["content"]
@@ -411,34 +410,119 @@ def _shell_env():
 # is a known read-only program used in a read-only way. Anything else — rm, mv,
 # cp, chmod, git push/reset, sed -i, curl, a script, a redirect (>), $(...) —
 # is treated as possibly destructive and needs your y/N first.
-_READ_ONLY = set("""ls cat head tail wc grep egrep fgrep rg pwd date whoami id uname hostname
-which type file stat du df tree cut tr uniq diff cmp comm md5sum sha1sum sha256sum basename
-dirname realpath readlink nl column jq true false test [ seq echo printf ps free uptime nproc
-lscpu sort find git python3 python node""".split())
+# Command names are not enough: OPTIONS can write too (git diff --output=FILE,
+# git branch --delete=NAME, sort -o FILE, tree -o FILE, file -C, rg --pre CMD).
+# Every option is therefore checked against the rules below, and anything not
+# known to be harmless means "ask".
+
+# Programs with NO option or operand that writes, deletes or runs another program.
+_PLAIN_READ = set("""ls cat head tail wc grep egrep fgrep pwd whoami id uname which type stat du
+df cut tr cmp comm diff md5sum sha1sum sha256sum basename dirname realpath readlink nl column
+jq true false test [ seq echo printf ps free uptime nproc lscpu""".split())
+
+# Programs that are read-only EXCEPT for these options (matched as long-option
+# prefixes, or as letters inside a short-option cluster like -ro).
+_DENY = {
+    "sort": ({"o"}, ("--output", "--compress-program")),
+    "tree": ({"o"}, ()),
+    "file": ({"C"}, ("--compile",)),
+    "rg":   (set(), ("--pre",)),                      # --pre runs a program on every file
+    "date": ({"s"}, ("--set",)),
+}
 _FIND_WRITES = ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls")
+
+# git: a read-only subcommand, and for each the options that write or run programs
+_GIT_DENY = ("--output", "--ext-diff", "--textconv", "--open-files-in-pager", "-O", "--exec")
 _GIT_READ = {"status", "log", "diff", "show", "ls-files", "rev-parse", "blame", "shortlog",
-             "describe", "grep", "branch", "remote", "tag"}
+             "describe", "grep"}
+# these three only LIST with exactly these options (anything else creates/deletes)
+_GIT_LIST_ONLY = {
+    "branch": {"-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list",
+               "--show-current", "--merged", "--no-merged", "--contains", "--no-contains",
+               "--points-at", "--sort", "--format", "--color", "--no-color", "--no-column"},
+    "tag":    {"-l", "--list", "-n", "--contains", "--no-contains", "--merged", "--no-merged",
+               "--points-at", "--sort", "--format", "--color", "--no-color"},
+    "remote": {"-v", "--verbose"},
+}
+_GIT_LIST_OPERAND = {"--list", "-l", "--contains", "--no-contains", "--merged", "--no-merged",
+                     "--points-at"}                 # options after which a name is a pattern/commit
+_GIT_GLOBAL_OK = {"--no-pager", "-P"}              # NOT -c (sets config: can run a program)
+
+
+def _split_options(args):
+    """→ (options, operands); everything after -- is an operand."""
+    opts, operands, rest = [], [], False
+    for a in args:
+        if rest or a == "-" or not a.startswith("-"):
+            operands.append(a)
+        elif a == "--":
+            rest = True
+        else:
+            opts.append(a)
+    return opts, operands
+
+
+def _denied(opts, letters, longs):
+    for o in opts:
+        if o.startswith("--"):
+            if o.startswith(longs):
+                return True
+        elif letters & set(o[1:]):
+            return True
+    return False
+
+
+def _git_is_read_only(args):
+    # global options before the subcommand: only harmless ones (-C DIR changes folder)
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        if args[i] == "-C" and i + 1 < len(args):
+            i += 2
+        elif args[i] in _GIT_GLOBAL_OK:
+            i += 1
+        else:
+            return False                               # -c, --exec-path=, --git-dir=, ...
+    if i >= len(args):
+        return False
+    sub, opts, operands = args[i], *_split_options(args[i + 1:])
+    if sub in _GIT_READ:
+        return not any(o.startswith(_GIT_DENY) for o in opts)
+    if sub in _GIT_LIST_ONLY:
+        allowed = _GIT_LIST_ONLY[sub]
+        if any(o.split("=", 1)[0] not in allowed for o in opts):
+            return False                               # -d, --delete=x, -m, -f, --set-upstream-to ...
+        # a name is only a pattern/commit after a listing option; otherwise it creates one
+        return not operands or any(o.split("=", 1)[0] in _GIT_LIST_OPERAND for o in opts)
+    return False
 
 
 def _segment_is_read_only(words):
     if not words:
         return True
     cmd, args = words[0], words[1:]
-    if "/" in cmd or "=" in cmd or cmd not in _READ_ONLY:
-        return False                                   # ./script, FOO=1 cmd, unknown program
+    if "/" in cmd or "=" in cmd:
+        return False                                   # ./script, FOO=1 cmd
+    if cmd in _PLAIN_READ:
+        return True
+    opts, operands = _split_options(args)
+    if cmd in _DENY:
+        letters, longs = _DENY[cmd]
+        if _denied(opts, letters, longs):
+            return False
+        if cmd == "date":                              # date MMDDhhmm SETS the clock
+            return all(o.startswith("+") for o in operands)
+        return True
+    if cmd == "uniq":                                  # uniq IN OUT writes OUT
+        return len(operands) <= 1
+    if cmd == "hostname":                              # hostname NAME / -F FILE sets it
+        return not operands and not _denied(opts, {"F", "b"}, ("--file", "--boot"))
     if cmd == "find":
         return not any(a.startswith(_FIND_WRITES) for a in args)
-    if cmd == "sort":
-        return not any(a == "-o" or a.startswith(("--output", "-o")) for a in args)
     if cmd in ("python3", "python", "node"):
         return args in (["--version"], ["-V"])
     if cmd == "git":
-        sub = [a for a in args if not a.startswith("-")]
-        if not sub or sub[0] not in _GIT_READ:
-            return False
-        # branch/remote/tag only list: any further non-flag word would create/delete
-        return not (sub[0] in ("branch", "remote", "tag") and len(sub) > 1)
-    return True
+        return _git_is_read_only(args)
+    return False                                       # unknown program: ask
 
 
 def shell_is_read_only(command):
@@ -472,7 +556,7 @@ def write_is_new_file(spec):
     refuse anyway (bad JSON, a path outside the workspace) writes nothing, so it
     is passed on unasked and the tool reports the problem to the agent."""
     try:
-        data = json.loads(str(spec))
+        data = json.loads(str(spec), strict=False)   # a model may put raw newlines in "content"
         path = _inside(data["path"])
     except Exception:
         return True

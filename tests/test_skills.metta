@@ -1,4 +1,4 @@
-; Phase 6 tests: skills (declare, discover, use in plans) + task manager.
+; Tests: skills (declare, discover, use in plans) + task manager.
 
 !(import! &self ../core/agent)
 !(import! &self "fake_tools.py")
@@ -95,7 +95,7 @@
 ; the replanned task was marked running when acted on, then completed
 !(test (status-of t1) completed)
 ; the capability gap is remembered in long-term memory (&kb, saved to disk)
-!(test (recall (capability-gap $x)) (((capability-gap "a weather API") 0.5)))
+!(test (recall (capability-gap $x)) (((capability-gap "a weather API") 0.6)))   ; gated like every memory write: at least memory-min-confidence
 ; the replan prompt carried what had happened before
 !(test (size-atom (collapse (match &wm (step $n $t $i $o) $n))) 6)
 

@@ -1,4 +1,4 @@
-; Phase 3: a REAL request with an invalid key (run with GEMINI_API_KEY=invalid-test-key).
+; A REAL request with an invalid key (run with GEMINI_API_KEY=invalid-test-key).
 ; Checks the network path and that a bad key is a PERMANENT auth error.
 
 !(import! &self ../core/schema)

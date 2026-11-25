@@ -152,7 +152,7 @@ def ask_user(question, timeout=None):
             _audit("ask", "ask-user", q, "error", why)
             _log(prompt + " >", f"(no answer: {why})")
             return ["error", f"the user did not answer: {why}. "
-                             "Continue with a stated assumption, or finish with what you have."]
+                             "Do not guess what you asked: do what does not need it, then say what is blocked."]
         answer = answer.strip()
         _audit("ask", "ask-user", q, "ok", answer)
         _log(prompt + " >", answer)
@@ -162,4 +162,4 @@ def ask_user(question, timeout=None):
     except BaseException as e:                   # Ctrl+C at the prompt included
         print("", flush=True)
         return ["error", f"the user did not answer ({type(e).__name__}). "
-                         "Continue with a stated assumption, or finish with what you have."]
+                         "Do not guess what you asked: do what does not need it, then say what is blocked."]

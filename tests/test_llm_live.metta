@@ -1,4 +1,4 @@
-; Phase 3 LIVE test: real Gemini calls (needs GEMINI_API_KEY).
+; Live tests: real Gemini calls (needs GEMINI_API_KEY).
 ; Gemini's wording varies, so we test the SHAPE of what comes back.
 
 !(import! &self ../core/schema)

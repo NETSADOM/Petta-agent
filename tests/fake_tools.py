@@ -1,4 +1,4 @@
-"""TEST FIXTURES ONLY — not real P-agent tools (you write those in Phase 5)."""
+"""TEST FIXTURES ONLY — not real P-agent tools."""
 
 
 def upper(text):
@@ -228,3 +228,91 @@ def speed_fixes_ok(_=None):
 
 def long_text(n):
     return "word " * (int(n) // 5)
+
+
+SHELL_CASES = {
+    # option and operand bypasses: must ASK
+    "git diff --output=file": False, "git diff --output file": False,
+    "git branch --delete=name": False, "git branch -d x": False, "git branch -D x": False,
+    "git branch newbranch": False, "git branch -m a b": False, "git tag v1": False,
+    "git tag -d v1": False, "git remote add o u": False, "git -c core.pager=sh log": False,
+    "git grep -O foo": False, "git diff --ext-diff": False, "git push": False,
+    "sort -o out in": False, "sort -ro out in": False, "sort --output=o in": False,
+    "tree -o out": False, "file -C -m x": False, "rg --pre sh foo": False,
+    "date -s now": False, "date 01010000": False, "uniq a b": False, "hostname evil": False,
+    "find . -delete": False, "cat a > b": False, "python3 x.py": False, "rm -rf x": False,
+    "echo $(rm x)": False, "curl http://x": False,
+    # plain reading: runs without asking
+    "git branch": True, "git branch -a": True, "git branch --list fe*": True,
+    "git tag -l": True, "git remote -v": True, "git -C sub status": True,
+    "git log --oneline -5": True, "git show HEAD:file": True, "sort -k2 -t, in": True,
+    "tree -L 2": True, "file a.txt": True, "rg -n foo": True, "date +%Y": True,
+    "uniq a": True, "hostname": True, "find . -name x": True, "ls -la | grep x": True,
+}
+
+
+def shell_rules_ok(_=None):
+    import agent_tools
+    bad = [c for c, want in SHELL_CASES.items() if agent_tools.shell_is_read_only(c) != want]
+    return True if not bad else bad
+
+
+# code with newlines, a tab, quotes and a backslash: must arrive EXACTLY like this
+MULTILINE = 'def f():\n\treturn "a\\b"\n'
+
+
+def multiline_json_reply(_=None):
+    import json
+    return json.dumps({"tool": "run-python", "input": MULTILINE})
+
+
+def multiline_raw_json_reply(_=None):
+    """A model that puts RAW newlines inside a JSON string (invalid strict JSON)."""
+    return '{"tool": "run-python", "input": "print(1)\nprint(2)"}'
+
+
+def is_multiline(s):
+    return str(s) == MULTILINE
+
+
+def is_two_lines(s):
+    return str(s) == "print(1)\nprint(2)"
+
+
+def claimed_files_ok(_=None):
+    import os
+    import capability_checks as c
+    import agent_tools
+    path = agent_tools._inside("exists.md")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").close()
+    checks = [
+        c.claimed_files_exist("g", "I saved the summary to exists.md.", "") is True,
+        isinstance(c.claimed_files_exist("g", "I saved it to missing.md", ""), list),
+        c.claimed_files_exist("g", "It was not saved to missing.md: write-file failed.", "") is True,
+        c.claimed_files_exist("g", "See https://arxiv.org/abs/1.2 for details.", "") is True,
+    ]
+    return all(checks) or checks
+
+
+def huge_prompt_len(_=None):
+    import prompts
+    big = "x" * 200_000
+    return len(prompts.act_prompt(big, big, big, big, big, big, big, 1, 40, big, big, big))
+
+
+def gpt_oss_replies_ok(_=None):
+    """gpt-oss native tool-call replies (Groq's failed_generation) become actions."""
+    import json
+    import reply_parser as r
+    import openai_compat as o
+    cases = {
+        json.dumps({"name": "commentary", "arguments": {"action": "read-skill", "input": "data-analysis"}}):
+            '(action read-skill "data-analysis")',
+        json.dumps({"name": "run-shell", "arguments": {"cmd": ["mkdir -p todo"]}}):
+            '(action run-shell "mkdir -p todo")',
+        json.dumps({"name": "commentary", "arguments": {"final": "done"}}): '(final "done")',
+    }
+    ok = all(r.extract(t) == ["found", want] for t, want in cases.items())
+    body = json.dumps({"error": {"code": "tool_use_failed", "failed_generation": '{"name": "now"}'}})
+    return ok and o.failed_generation(400, body) == '{"name": "now"}' and o.failed_generation(401, body) == ""

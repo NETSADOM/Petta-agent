@@ -11,6 +11,7 @@
 !(import! &self my_capabilities)
 
 !(set-config ui pretty)                ; render events with core/ui.py
+!(set-config fast-plan on)             ; short single-step goals skip the planning LLM call
 
 ; long-term memory file; PAGENT_KB overrides it (tests use their own file)
 (= (kb-path) (py-call (os.getenv "PAGENT_KB" "data/kb.metta")))

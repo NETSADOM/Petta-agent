@@ -5,7 +5,7 @@
 GOALS.txt    one goal per line, typed at "you>" in order; then "quit".
 ANSWERS.txt  one line per question the agent asks (ask-user), in order.
              When they run out, the driver answers with an empty line.
---approve    what to type at every "[y/N]" approval prompt (default y).
+--approve    what to type at every approval prompt, [y/N] or [y/N/a ...] (default y).
 
 It plays the user at the keyboard: it waits for the agent's prompts and types
 the next line, exactly as a person would. Everything it types appears in the
@@ -69,7 +69,7 @@ def main():
             sys.stdout.write(goal + "\n")
             send(goal)
             buf = ""
-        elif buf.endswith("[y/N] "):
+        elif buf.endswith("[y/N] ") or buf.endswith("for this session] "):   # [y/N/a = allow T for this session]
             sys.stdout.write(args.approve + "\n")
             send(args.approve)
             buf = ""

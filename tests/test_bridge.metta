@@ -1,4 +1,4 @@
-; Phase 1 bridge tests: everything P-agent will rely on, in one process.
+; Bridge tests: everything P-agent will rely on, in one process.
 ; Ends by saving &kb so test_persist.metta can reload it in a fresh process.
 
 !(import! &self ../core/store)

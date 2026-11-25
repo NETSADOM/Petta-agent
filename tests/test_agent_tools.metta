@@ -121,8 +121,8 @@
               "(action run-shell \"rm report.txt\")"
               "(ask-user \"still there?\")"
               "(task-done t1)"
-              "(final \"wrote report.txt; you chose teal\")"))
-!(test (run-agent "write a report") (done "wrote report.txt; you chose teal"))
+              "(final \"wrote report.txt; you chose teal. You did not answer: still there?\")"))
+!(test (run-agent "write a report") (done "wrote report.txt; you chose teal. You did not answer: still there?"))
 ; every failure became a readable observation, and the run still finished
 !(test (repr (outcomes))
-       "((1 read-file (error no such file: missing.txt (use list-files))) (2 write-file (ok wrote 4 characters to report.txt)) (3 send-message (ok message shown to the user)) (4 ask-user (ok teal)) (5 run-shell (error denied-by-user)) (6 ask-user (error the user did not answer: input is closed (no user at the terminal). Continue with a stated assumption, or finish with what you have.)) (7 task-done (ok completed)))")
+       "((1 read-file (error no such file: missing.txt (use list-files))) (2 write-file (ok wrote 4 characters to report.txt)) (3 send-message (ok message shown to the user)) (4 ask-user (ok teal)) (5 run-shell (error denied-by-user)) (6 ask-user (error the user did not answer: input is closed (no user at the terminal). Do not guess what you asked: do what does not need it, then say what is blocked.)) (7 task-done (ok completed)))")

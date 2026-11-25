@@ -10,6 +10,8 @@
 ;       pattern     regex the WHOLE input must match            (repeatable)
 ;       retry       yes | no: retry temporary errors (timeouts)  (default yes)
 ;                   use no for tools with side effects (shell) or a person (ask-user)
+;       retries     how many times (default: config max-retries). Web tools use 1:
+;                   a site that timed out rarely answers on the next try
 ;       auto-approve  module.function(input) → True when THIS input is harmless, so a
 ;                   needs-approval tool runs without asking (e.g. a read-only shell
 ;                   command). False, an error or a crash → you are asked as usual.
@@ -30,6 +32,7 @@
 (default-tool-option max-calls 40)     ; runaway guard; long tasks (40 turns) must fit
 (default-tool-option allow-empty no)     ; yes for tools that need no input (list-files, now)
 (default-tool-option retry yes)
+(default-tool-option retries default)   ; how many retries; default = config max-retries
 (default-tool-option auto-approve none)
 (default-tool-option remember-approval no)
 
@@ -133,6 +136,10 @@
          (run-retrying $tool $input 1)))
 
 ; ---------------- retry (recovery manager) ----------------
+(= (tool-retries $t)
+   (let $v (tool-option $t retries)
+        (if (== $v default) (config-value max-retries) $v)))
+
 ; Temporary errors are retried after a backoff, at most max-retries times.
 ; Permanent errors (bad input, denied, bugs) are returned at once.
 ; Retries happen AFTER the gates: you are never asked to approve twice.
@@ -144,7 +151,7 @@
 (= (run-retrying $tool $input $attempt)
    (let $out (run-tool $tool $input)
         (if (and (retryable $out)
-                 (and (== (tool-option $tool retry) yes) (<= $attempt (config-value max-retries))))
+                 (and (== (tool-option $tool retry) yes) (<= $attempt (tool-retries $tool))))
             (let* (($s (emit (retry $attempt $tool (index-atom $out 1))))
                    ($b (backoff $attempt))
                    ($n (note-retry $tool $input $attempt))

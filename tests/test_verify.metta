@@ -1,4 +1,4 @@
-; Phase 8 tests: multi-layer verification of final answers.
+; Tests: multi-layer verification of final answers.
 
 !(import! &self ../core/agent)
 !(import! &self "fake_tools.py")
@@ -99,4 +99,4 @@
               "(final \"c\")" "(verdict unsupported \"no\")"))
 !(set-config verify-semantic on)
 !(test (run-agent "x") (done-unverified "c"))
-!(test (episode-confidence (done-unverified "c")) 0.4)
+!(test (episode-confidence (done-unverified "c")) 0)   ; not verified = not kept

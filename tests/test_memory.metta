@@ -1,4 +1,4 @@
-; Phase 7 tests: selective memory formation, sensitivity filter, relevance, episodes, limits.
+; Tests: selective memory formation, sensitivity filter, relevance, episodes, limits.
 
 !(import! &self ../core/agent)
 !(import! &self "fake_tools.py")

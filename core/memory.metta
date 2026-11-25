@@ -7,7 +7,7 @@
 ;   (similar-episodes GOAL)           past runs with similar goals
 ;   (prune-memory)                    keep &kb under memory-max facts
 
-!(import! &self "memory.py")
+!(import! &self "text.py")
 !(import! &self "toolrunner.py")
 
 !(set-config memory-min-confidence 0.6)
@@ -25,12 +25,12 @@
    (collapse
      (superpose
        ((if (is-expression $c) (empty) not-structured)
-        (if (py-call (memory.is_probability $conf))
+        (if (py-call (text.is_probability $conf))
             (if (>= $conf (config-value memory-min-confidence)) (empty) low-confidence)
             bad-confidence)
         (if (> (py-call (toolrunner.length (repr $c))) (config-value memory-max-chars)) too-long (empty))
-        (let $why (py-call (memory.sensitive_reason (repr $c)))
-             (if (py-call (memory.is_sensitive (repr $c))) (sensitive $why) (empty)))))))
+        (let $why (py-call (text.sensitive_reason (repr $c)))
+             (if (py-call (text.is_sensitive (repr $c))) (sensitive $why) (empty)))))))
 
 (= (learn-fact $c $conf $source)
    (let $problems (learn-problems $c $conf)
@@ -44,32 +44,38 @@
 ; tools that actually succeeded in this run, in order, once each
 (= (tools-used)
    (unique-atom (collapse (let $t (match &wm (step $n $t $i (ok $x)) $t)
-                               (if (tool-known $t) $t (empty))))))
+                               (if (work-tool $t) $t (empty))))))   ; schema.metta
 
 (= (episode-confidence $result)
    (case (car-atom $result)
          ((done 0.8)
-          (done-unverified 0.4)
+          (done-unverified 0)        ; not verified = not a success: never kept
           ($other 0))))
 
 ; Only successful runs are kept; the same goal replaces its old episode.
+; Like EVERY write to &kb it goes through the gates of learn-fact: sensitivity
+; (a goal or answer with a password or an email is not kept), size, pruning.
+; Goal and answer are shortened first so an ordinary episode fits the size limit.
 (= (form-episode $result)
    (let $conf (episode-confidence $result)
         (if (== $conf 0)
             not-kept
-            (let* (($goal (as-string (py-call (memory.normalize (goal-text)))))
-                   ($answer (as-string (py-call (memory.shorten (index-atom $result 1) 200))))
+            (let* (($goal (as-string (py-call (text.shorten (py-call (text.normalize (goal-text))) 110))))
+                   ($answer (as-string (py-call (text.shorten (index-atom $result 1) 110))))
                    ($tools (cons-atom tools (tools-used)))
-                   ($old (collapse (forget (episode $goal $t $a))))
-                   ($r (remember (episode $goal $tools $answer) agent $conf)))
-                  (kept $goal)))))
+                   ($c (episode $goal $tools $answer)))
+                  (if (== (learn-problems $c $conf) ())
+                      (let* (($old (collapse (forget (episode $goal $t $a))))
+                             ($r (learn-fact $c $conf agent)))
+                            (kept $goal))
+                      (not-kept (learn-problems $c $conf)))))))
 
 ; ---------------- recall: only what's relevant ----------------
 ; score = words shared with the goal; preferences always count
 (= (fact-relevance $c $goal)
    (if (== (car-atom $c) preference)
        100
-       (py-call (memory.overlap (repr $c) $goal))))
+       (py-call (text.overlap (repr $c) $goal))))
 
 (= (take $list $k)
    (if (or (== $k 0) (== $list ()))
@@ -92,7 +98,7 @@
 ; past runs whose goal shares words with this one: ((GOAL TOOLS ANSWER) ...) best first, max 3
 (= (similar-episodes $goal)
    (let $scored (collapse (let* (($e (match &kb (fact (episode $g $tl $a) (meta $s $t $conf)) ($g $tl $a $conf)))
-                                 ($sc (py-call (memory.overlap (index-atom $e 0) $goal))))
+                                 ($sc (py-call (text.overlap (index-atom $e 0) $goal))))
                                 (if (> $sc 0) ((- 0 $sc) (- 0 (index-atom $e 3)) $e) (empty))))
         (map-atom (take (sort-atom $scored) 3) $x
                   (let $e (index-atom $x 2) ((index-atom $e 0) (index-atom $e 1) (index-atom $e 2))))))

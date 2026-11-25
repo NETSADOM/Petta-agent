@@ -4,7 +4,7 @@
 ;                               | (done-unverified "answer")   final accepted with open tasks
 ;                               | (stopped REASON)
 ;
-; Gemini proposes; THIS file decides. Every proposal is validated (llm.metta),
+; The LLM proposes; THIS file decides. Every proposal is validated (llm.metta),
 ; permission-checked, executed, and recorded as a (step ...) in &wm.
 
 !(import! &self store)
@@ -30,6 +30,69 @@
 (= (metta-tool send-message $text) (py-call (io_helper.send_message $text)))
 (= (metta-tool ask-user $question) (py-call (io_helper.ask_user $question)))
 
+; ---------------- the notebook: findings that survive history trimming ----------------
+; (note ID KIND "text") atoms in &wm, shown in EVERY act prompt (context.metta),
+; while old steps get shortened and dropped. Bounded: note-max notes of at most
+; 250 characters; when full, the oldest "found" note makes room.
+!(import! &self "text.py")      ; note parsing and formatting
+!(declare-tool note "your notebook, kept and shown all run (old steps get shortened). Input KIND: text with KIND found, file, decision, todo or blocker; or drop: nN to remove note N" safe metta)
+!(set-tool-option note retry no)
+!(set-tool-option note max-length 600)
+!(set-config note-max 15)
+
+(= (metta-tool note $in)
+   (let $p (py-call (text.parse_note $in))
+        (case (car-atom $p)
+              ((add  (add-note (index-atom $p 1) (as-string (index-atom $p 2))))
+               (drop (drop-note (index-atom $p 1)))
+               ($e   (error (index-atom $p 1)))))))
+
+(= (note-list) (sort-atom (collapse (match &wm (note $n $k $t) ($n $k $t)))))
+(= (note-count) (size-atom (note-list)))
+; ids are never reused (a dropped n2 stays gone): a counter in &wm
+(= (next-note-id)
+   (let* (($old (collapse (match &wm (note-seq $x) $x)))
+          ($n (if (== $old ()) 1 (+ 1 (car-atom $old))))
+          ($c (if (== $old ()) () (remove-atom &wm (note-seq (car-atom $old)))))
+          ($r (add-atom &wm (note-seq $n))))
+         $n))
+
+(= (add-note $kind $text)
+   (let $room (if (< (note-count) (config-value note-max)) yes (drop-oldest-found))
+        (if (== $room yes)
+            (let* (($n (next-note-id))
+                   ($r (add-atom &wm (note $n $kind $text))))
+                  (ok (noted (n $n) $kind)))
+            (error "notebook full: drop finished notes first, e.g. drop: n2"))))
+
+(= (drop-oldest-found)
+   (let $found (sort-atom (collapse (match &wm (note $n found $t) ($n $t))))
+        (if (== $found ())
+            no
+            (let* (($f (car-atom $found))
+                   ($n (index-atom $f 0))
+                   ($t (index-atom $f 1))
+                   ($r (remove-atom &wm (note $n found $t))))
+                  yes))))
+
+(= (drop-note $n)
+   (let $hits (collapse (match &wm (note $n $k $t) (note $n $k $t)))
+        (if (== $hits ())
+            (error (no-such-note $n))
+            (let $a (car-atom $hits)
+                 (let $r (remove-atom &wm $a) (ok (dropped (n $n))))))))
+
+; a file the agent wrote is worth remembering all run: noted automatically
+(= (auto-note $tool $input $out)
+   (if (and (== $tool ask-user) (== (car-atom $out) error))
+       (add-note blocker (as-string (py-call (text.unanswered_note $input))))
+   (if (and (== $tool write-file) (== (car-atom $out) ok))
+       (let $text (py-call (text.written_note $input))
+            (if (== (py-call (toolrunner.is_blank $text)) True)
+                ()
+                (add-note file (as-string $text))))
+       ())))
+
 !(set-config max-replans 2)
 ; max-iterations (turns per goal, default 40) is set in context.metta: the prompt shows it
 !(set-config max-invalid 3)          ; bad replies IN A ROW before giving up
@@ -38,6 +101,7 @@
 !(set-config max-failures-in-row 8)  ; this many failed steps in a row (any tools) = stuck
 !(set-config agent-depth 0)          ; 0 = the main agent, 1 = a helper (sub-agent)
 !(set-config sub-agent-turns 20)     ; turn limit of one helper run
+!(set-config delegate off)           ; on = offer delegate to the model (context.metta)
 !(set-config max-final-rejections 2) ; then accept final as done-unverified
 
 (= (show $x) (emit $x))      ; all output goes through emit (schema.metta)
@@ -110,8 +174,11 @@
           ($rep (if (== (car-atom $result) stopped) (show (stuck-report $result)) ()))
           ($ses (if (== (config-value agent-depth) 0)                     ; helpers are not session tasks
                     (py-call (session.record (goal-text) (repr $result))) ()))
-          ($m (form-episode $result))        ; memory: keep successful runs
-          ($f (if (== (car-atom $result) done) (learn-recoveries) ())))   ; what fixed failures
+          ; long-term memory: only the MAIN goal. A helper's sub-task is not a task
+          ; of yours, and storing it as an episode taught later runs the wrong tools.
+          ($main (== (config-value agent-depth) 0))
+          ($m (if $main (form-episode $result) not-kept))   ; keep successful runs
+          ($f (if (and $main (== (car-atom $result) done)) (learn-recoveries) ())))   ; what fixed failures
          $result))
 
 ; a permanent API error (bad key, unknown model, ...) stops everything at once
@@ -165,11 +232,16 @@
 (= (do-actions $p $i) (after-calls (run-calls (cdr-atom $p) $i) $i))
 
 ; → ran | (stop REASON); a batch stops at the first (stop ..)
+; A batch may also close tasks: (actions (task-done t1) (action write-file "..."))
+; saves the separate task-done turn.
 (= (run-calls $calls $i)
    (if (== $calls ())
        ran
        (let* (($c (car-atom $calls))
-              ($r (run-call (index-atom $c 1) (index-atom $c 2) $i)))
+              ($r (if (== (car-atom $c) task-done)
+                      (let $ids (cdr-atom $c)
+                           (let $rs (collapse (let $id (superpose $ids) (mark-done $id))) ran))
+                      (run-call (index-atom $c 1) (index-atom $c 2) $i))))
              (if (== $r ran) (run-calls (cdr-atom $calls) $i) $r))))
 
 (= (after-calls $r $i)
@@ -184,17 +256,21 @@
    (if (stuck $tool $input)
        (let* (($out (error (repeated-call (count-errors-of $tool $input)
                                           "this exact call already failed; do not repeat it: change the input, use another tool, ask-user, or mark the task failed")))
-              ($s1 (show (step $i (current-task) $tool $input)))
+              ($k (+ 1 (step-count)))                  ; the step number this call gets
+              ($s1 (show (step $k (current-task) $tool $input)))
               ($s2 (show (result $out)))
               ($r (record-step $tool $input $out)))
              (if (>= (refusals) (config-value max-refusals))
                  (stop (repeated-failure $tool $input))   ; not (stuck ..): that would evaluate!
                  ran))
        (let* (($task (start-current-task))          ; pending → running
-              ($s1 (show (step $i $task $tool $input)))
+              ($k (+ 1 (step-count)))                  ; the number the history and messages use
+              ($s1 (show (step $k $task $tool $input)))
               ($out (flag-repeat (execute-call $tool $input)))
               ($s2 (show (result $out)))
-              ($r (record-step $tool $input $out)))
+              ($r (record-step $tool $input $out))
+              ($w (add-atom &wm (step-task $k $task)))   ; which task this call worked on
+              ($a (auto-note $tool $input $out)))
              ran)))
 
 ; Models often call a SKILL as if it were a tool, e.g. (action summarization "x").
@@ -232,9 +308,22 @@
 (= (task-exists $id) (not (== (collapse (status-of $id)) ())))
 
 ; (task-done t1) or (task-done t1 t2 t3): several tasks in ONE reply (one LLM call)
+; EVIDENCE: a task whose tool calls ALL failed is not done — a failed call is not
+; completed work. A task that needed no tool (only reasoning, or notes) may close.
+;   ok | no-work | all-failed
+(= (task-evidence $id)
+   (let $work (collapse (let* (($n (match &wm (step-task $n $id) $n))
+                               ($s (match &wm (step $n $t $i $o) ($t $o))))
+                              (if (work-tool (index-atom $s 0)) (car-atom (index-atom $s 1)) (empty))))
+        (if (== $work ())
+            no-work
+            (if (is-member ok (unique-atom $work)) ok all-failed))))   ; is-member succeeds once PER occurrence
+
 (= (mark-done $id)
    (let* (($out (if (task-exists $id)
-                    (let $r (set-status $id completed) (ok completed))
+                    (if (== (task-evidence $id) all-failed)
+                        (error (no-evidence $id "every tool call for this task failed - a failed call is not completed work: fix it and run it again, or (task-failed ID \"why\")"))
+                        (let $r (set-status $id completed) (ok completed)))
                     (error unknown-task)))
           ($s (show (task-done $id $out)))
           ($r2 (record-step task-done $id $out)))
@@ -253,7 +342,10 @@
 ; accepted → recorded as steps, refused → back to running (work goes on).
 (= (close-running-tasks)
    (let $ids (running-tasks)
-        (collapse (let $id (superpose $ids) (let $r (set-status $id completed) $id)))))
+        (collapse (let $id (superpose $ids)
+                       (if (== (task-evidence $id) all-failed)
+                           (empty)                    ; stays open: verification says so
+                           (let $r (set-status $id completed) $id))))))
 
 (= (reopen-tasks $ids)
    (collapse (let $id (superpose $ids) (set-status $id running))))
@@ -275,7 +367,7 @@
           ($r (record-step task-failed $id $out)))
          (continue $i)))
 
-; new plan from what was learned; limited so Gemini can't replan forever
+; new plan from what was learned; limited so the model can't replan forever
 (= (do-replan $p $i)
    (if (>= (size-atom (collapse (match &wm (step $n replan $w $o) $n))) (config-value max-replans))
        (let $r (record-step replan (index-atom $p 1) (error replan-limit)) (continue $i))
@@ -289,12 +381,12 @@
 ; no tool can do it: remember the gap in &kb (saved) for the developer to review
 (= (do-missing $p $i)
    (let* (($what (index-atom $p 1))
-          ($k (remember (capability-gap $what) gemini 0.5))
+          ($k (learn-fact (capability-gap (as-string (py-call (text.shorten $what 200)))) 0.6 agent))   ; gated like every memory write
           ($s (show (missing-capability $what)))
           ($r (record-step missing-capability $what (ok recorded))))
          (continue $i)))
 
-; Gemini wants to remember a fact: PeTTa's memory gates decide (memory.metta)
+; the model wants to remember a fact: PeTTa's memory gates decide (memory.metta)
 (= (do-learn $p $i)
    (let* (($c (index-atom $p 1))
           ($out (learn-fact $c (index-atom $p 2) gemini))
@@ -307,18 +399,34 @@
    (let* (($q (index-atom $p 1))
           ($out (execute ask-user $q))
           ($s (if (== (car-atom $out) error) (show (result $out)) ()))
-          ($r (record-step ask-user $q $out)))
+          ($r (record-step ask-user $q $out))
+          ($a (auto-note ask-user $q $out)))
          (continue $i)))
 
-; PeTTa, not Gemini, decides whether the work is finished: verify.metta runs
-; symbolic → objective → semantic checks. Rejected answers go back to Gemini
+; PeTTa, not the model, decides whether the work is finished: verify.metta runs
+; symbolic → objective → semantic checks. Rejected answers go back to the model
 ; with the reasons; after max-final-rejections → done-unverified (never silent).
+; Blocked by the user: a question went unanswered and the answer REPORTS that
+; (instead of guessing). The open tasks become blocked, and the goal ends as
+; (blocked "answer"): honest, but not a success.
+; Only when work is still OPEN: an unanswered question after everything was done
+; blocks nothing, and the goal is simply done.
+(= (blocked-by-user $answer)
+   (and (and (not (== (unanswered-questions) ())) (not (== (open-tasks) ())))
+        (py-call (text.reports_blocked $answer))))
+
+(= (block-open-tasks)
+   (let $open (open-tasks)
+        (collapse (let $id (superpose $open) (set-status $id blocked)))))
+
 (= (do-final $p $i)
    (let* (($answer (index-atom $p 1))
+          ($blocked (blocked-by-user $answer))
+          ($b (if $blocked (block-open-tasks) ()))
           ($closed (close-running-tasks))
           ($problems (verify-answer $answer)))
          (if (== $problems ())
-             (let $c (record-closed $closed) (done $answer))
+             (let $c (record-closed $closed) (if $blocked (blocked $answer) (done $answer)))
              (if (>= (count-errors finish) (config-value max-final-rejections))
                  (let $c (record-closed $closed) (done-unverified $answer))
                  (let* (($o (reopen-tasks $closed))
@@ -326,7 +434,7 @@
                         ($r (record-step finish $answer (error (verification-failed $problems)))))
                        (continue $i))))))
 
-; bad reply: tell Gemini (it sees the step next time), give up after a few
+; bad reply: tell the model (it sees the step next time), give up after a few
 (= (do-invalid $p $i)
    (let* (($s (show (gemini-reply $p)))
           ($r (record-step gemini reply (error $p))))
@@ -342,7 +450,7 @@
               ($k (trailing-errors gemini-api)))
              (if (>= $k (config-value max-llm-errors))
                  (stopped $p)
-                 (let $b (py-call (recovery.sleep (* $k (config-value llm-backoff))))   ; back off
+                 (let $b (py-call (toolrunner.backoff_sleep (* $k (config-value llm-backoff))))   ; back off
                       (continue $i))))))
 
 ; ================================================================ sub-agents
@@ -367,7 +475,8 @@
 (= (helper-outcome $r)
    (case (car-atom $r)
          ((done (ok (index-atom $r 1)))
-          (done-unverified (ok (helper-answer-unverified (index-atom $r 1))))
+          ; NOT verified = NOT done: the parent must not count it as completed work
+          (done-unverified (error (helper-incomplete "its answer could not be verified" (unverified-answer (index-atom $r 1)))))
           (cancelled (error "the helper was cancelled by the user"))
           ($other (error (helper-stopped (index-atom $r 1)))))))
 

@@ -1,4 +1,4 @@
-; Phase 8 tests: Error Recovery Manager.
+; Tests: Error Recovery Manager.
 ; stdin: "y" approves the single approval request (approval is not re-asked on retry).
 
 !(import! &self ../core/agent)

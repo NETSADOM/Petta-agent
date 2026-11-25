@@ -1,4 +1,4 @@
-; Phase 4 tests: the full agent loop with a SCRIPTED brain (no API key needed).
+; Tests: the full agent loop with a SCRIPTED brain (no API key needed).
 ; Scripted replies still go through parsing, validation, permissions, tools.
 ; stdin (piped by run_tests.sh) answers the interactive questions, in order:
 ;   1. "n"     deny write-note       (scenario 6)
@@ -119,9 +119,12 @@
 ; ===== 6. needs-approval tool, user says "n" → denied, tool NOT run =====
 !(use-script ("(plan (task t1 \"save\"))"
               "(action write-note \"secret\")"
-              "(task-done t1)"
-              "(final \"could not save\")"))
-!(test (run-agent "x") (done "could not save"))
+              "(task-done t1)"                                ; refused: its only call failed
+              "(task-failed t1 \"the user denied the write\")"
+              "(final \"could not save: you denied the write\")"))
+!(test (run-agent "x") (done "could not save: you denied the write"))
+!(test (index-atom (outcomes) 1) (2 task-done (error (no-evidence t1 "every tool call for this task failed - a failed call is not completed work: fix it and run it again, or (task-failed ID \"why\")"))))
+!(test (collapse (status-of t1)) (failed))
 !(test (index-atom (outcomes) 0) (1 write-note (error denied-by-user)))
 !(test (match &wm (approval write-note $i $yes) $yes) false)
 !(test (py-call (fake_tools.note_count)) 0)
@@ -160,8 +163,8 @@
 !(use-script ("(plan (task t1 \"t\"))" "lol" "(dance)" "(action)" "(final \"x\")"))
 !(test (run-agent "x") (stopped too-many-invalid-replies))
 
-; ===== 11. bad plan → agent continues without a plan =====
-!(use-script ("not a plan" "(final \"fine\")"))
+; ===== 11. bad plan → sent back once to be corrected; still bad → continue without a plan =====
+!(use-script ("not a plan" "still not a plan" "(final \"fine\")"))
 !(test (run-agent "x") (done "fine"))
 
 ; ===== 12. task-done for a task that doesn't exist =====

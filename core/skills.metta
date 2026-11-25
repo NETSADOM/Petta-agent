@@ -38,7 +38,6 @@
 !(set-config skill-max-recommended 4)  ; recommended skills in the PLAN prompt
 
 (= (skill-known $s) (not (== (collapse (match &caps (skill $s $d) yes)) ())))
-(= (skill-names) (collapse (match &caps (skill $n $d) $n)))
 
 (= (declare-skill $name $desc $tools $keywords)
    (if (skill-known $name)
@@ -113,9 +112,6 @@
 (= (skill-detail $s)
    (let $d (match &caps (skill $s $x) $x)
         ($s $d (collapse (match &caps (skill-info $s $k $v) ($k $v))))))
-
-(= (relevant-skill-details $goal)
-   (map-atom (relevant-skills $goal) $s (skill-detail $s)))
 
 ; + its extra files, for the prompt renderer (skill_files.render)
 (= (skill-view $s)

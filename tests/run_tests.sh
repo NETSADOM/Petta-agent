@@ -50,6 +50,14 @@ run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_long_task.metta < /dev/n
 # sub-agents (delegate) and web-search parsing
 run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_subagent.metta < /dev/null'
 
+# no unnecessary steps: fast plans, batched task-done, proven answers, retries, recoveries
+run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_efficiency.metta < /dev/null'
+
+# safety and honest completion: shell options, multiline input, notebook, evidence,
+# no guessing, gated memory, dependency cycles, bounded prompts (stdin: no answers)
+rm -rf data/test_safety_ws
+run sh -c 'env -u GEMINI_API_KEY PAGENT_WORKSPACE=data/test_safety_ws sh ./run.sh tests/test_safety.metta < /dev/null'
+
 # the real CLI (main.metta): commands, two goals in ONE session (no restart),
 # the stuck report, the session history, the transcript log, clean quit
 echo "== CLI (main.metta)"
