@@ -20,6 +20,9 @@
 !(import! &self "session.py")       ; earlier goals of this CLI session (bounded)
 !(set-config context-steps 8)        ; recent steps shown in full
 !(set-config context-obs-chars 600)  ; max characters per step input/outcome
+!(set-config context-fresh-chars 12000) ; the LATEST turn's results, shared between them: the model
+                                     ; reads a fetched page once, in full, instead of 600 characters
+                                     ; of it (which made it fetch the same page again and again)
 !(set-config context-older-steps 20) ; the older steps kept in short form (only these)
 !(set-config context-older-chars 120); max characters per short outcome
 !(set-config max-iterations 40)     ; turns (LLM calls) per goal; shown as PROGRESS, enforced by agent.metta
@@ -36,6 +39,13 @@
 (= (clip $x) (clip-to $x (config-value context-obs-chars)))
 
 (= (step-view $n $t $i $o) ($n $t (clip $i) (clip $o)))
+
+; a step from the latest turn: its outcome gets a share of context-fresh-chars
+(= (fresh-view $n $t $i $o $budget) ($n $t (clip $i) (clip-to $o $budget)))
+
+(= (fresh-budget $k)
+   (let $share (if (> $k 0) (/ (config-value context-fresh-chars) $k) 0)
+        (if (> $share (config-value context-obs-chars)) $share (config-value context-obs-chars))))
 
 (= (short $x $n) (clip-to $x $n))
 
@@ -61,8 +71,14 @@
 
 (= (steps-repr)
    (let* (($cut (- (step-count) (config-value context-steps)))
+          ($fresh (fresh-from))
+          ($budget (fresh-budget (- (step-count) $fresh)))
           ($recent (sort-atom (collapse (match &wm (step $n $t $i $o)
-                                               (if (> $n $cut) (step-view $n $t $i $o) (empty))))))
+                                               (if (> $n $cut)
+                                                   (if (> $n $fresh)
+                                                       (fresh-view $n $t $i $o $budget)
+                                                       (step-view $n $t $i $o))
+                                                   (empty))))))
           ($summary (older-summary $cut)))
          (repr (union-atom $summary $recent))))
 
@@ -74,26 +90,37 @@
 (= (facts-repr) (repr (relevant-facts (goal-text))))
 (= (episodes-repr) (repr (similar-episodes (goal-text))))
 
-; PeTTa picks the relevant skills; the LLM sees their full procedures.
+; The tools the model is offered. A helper (agent-depth 1) cannot start another
+; helper, so delegate is not shown to it: offering it only wasted helper turns.
+(= (prompt-tool-catalog)
+   (if (not (== (collapse (config-value agent-depth)) (1)))   ; unset (no agent loaded) = main
+       (tool-catalog)
+       (let $all (tool-catalog)                        ; bind first: superpose does not evaluate
+            (collapse (let $t (superpose $all)
+                           (if (== (car-atom $t) delegate) (empty) $t))))))
+
+; The planner sees ALL available skills (name + description) and short
+; summaries of the best matches; it may pick any skill, matched or not.
 (= (plan-request)
-   (py-call (prompts.plan_prompt (goal-text) (repr (tool-catalog)) (repr (skill-catalog))
-                                 (repr (relevant-skill-details (goal-text)))
+   (py-call (prompts.plan_prompt (goal-text) (repr (prompt-tool-catalog)) (repr (skill-catalog))
+                                 (recommended-skills-text (goal-text))
                                  (tasks-repr) (steps-repr) (facts-repr) (episodes-repr)
                                  (py-call (session.summary)))))
 
-; the current task and the guide of the skill it uses
+; the current task and the FULL guides of the skills it uses (skills.metta)
 (= (current-task-repr)
    (let $t (current-task)
         (if (== $t none)
             "none"
-            (repr ($t (collapse (match &wm (task $t $d $s) $d))
-                      (map-atom (skills-of-task $t) $s (skill-detail $s)))))))
+            (py-call (skill_files.render_task $t (match &wm (task $t $d $s) $d)
+                                              (skill-views (skills-of-task $t))
+                                              (config-value skill-guide-chars))))))
 
 (= (act-request)
    (py-call (prompts.act_prompt (goal-text) (tasks-repr) (current-task-repr) (steps-repr)
-                                (repr (tool-catalog)) (facts-repr) (repr (recovery-hints))
+                                (repr (prompt-tool-catalog)) (facts-repr) (repr (recovery-hints))
                                 (current-turn) (config-value max-iterations)
-                                (py-call (session.summary)))))
+                                (py-call (session.summary)) (repr (skill-catalog)))))
 
 ; size of what is sent each iteration (for measuring)
 (= (context-chars) (py-call (toolrunner.length (act-request))))

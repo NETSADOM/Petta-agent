@@ -99,6 +99,13 @@
                 $p
                 (invalid bad-shape)))))
 
+; (task-done t1 t2 ...): every id must be a symbol
+(= (task-ids-ok $p)
+   (let $ids (cdr-atom $p)
+        (if (== (collapse (let $id (superpose $ids) (if (is-symbol $id) (empty) bad))) ())
+            $p
+            (invalid bad-shape))))
+
 (= (check-proposal $p)
    (if (is-expression $p)
        (if (== $p ())
@@ -108,6 +115,8 @@
 
 (= (check-one $p)
    (if (is-expression $p)
+       (if (and (== (car-atom $p) task-done) (> (size-atom $p) 2))
+           (task-ids-ok $p)                      ; (task-done t1 t2 ...)
        (case $p
              (((action $tool $input) (if (is-symbol $tool) $p (invalid bad-shape)))
               ((final $answer) $p)
@@ -118,7 +127,7 @@
               ((missing-capability $what) $p)
               ((learn $content $conf) $p)          ; gated later by learn-fact
               ((invalid $why) $p)
-              ($other (invalid bad-shape))))
+              ($other (invalid bad-shape)))))
        (invalid bad-shape)))
 
 ; ---------------- validate and load a plan ----------------

@@ -7,6 +7,18 @@ def has_number(goal, answer, observations):
     return re.search(r"\d", str(answer)) is not None
 
 
+COMPUTED = re.compile(r'\(\d+ (?:calc|run-python) "(?:[^"\\]|\\.)*" \(ok ')
+
+
+def computed_by_tool(goal, answer, observations):
+    """Math answers must come from a tool: at least one successful calc (or
+    run-python) call in the observations. Language models get arithmetic wrong
+    without noticing, so "it was easy" is no reason to skip the tool."""
+    if COMPUTED.search(str(observations)):
+        return True
+    return ["error", "no calc result in the observations: run calc on the expression, then answer with its result"]
+
+
 def number_is_observed(goal, answer, observations):
     """Every number in the answer should come from a tool observation or the goal
     (catches invented figures). Small numbers (0-10) are ignored: counts/ordinals."""

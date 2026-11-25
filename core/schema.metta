@@ -143,8 +143,16 @@
 
 ; ---------------- turn counter (context.metta shows it: the model paces long tasks) ----------------
 (= (set-turn $i)
-   (let $old (collapse (let $a (match &wm (turn $x) (turn $x)) (remove-atom &wm $a)))
-        (add-atom &wm (turn $i))))
+   (let* (($old (collapse (let $a (match &wm (turn $x) (turn $x)) (remove-atom &wm $a))))
+          ($k (step-count))                                   ; bind first: add-atom does not evaluate
+          ($m (add-atom &wm (turn-mark $i $k))))              ; steps recorded before turn $i
+         (add-atom &wm (turn $i))))
+
+; steps recorded since the previous turn began: what the model has NOT seen yet
+(= (fresh-from)
+   (let* (($t (- (current-turn) 1))                          ; bind first: match does not evaluate
+          ($prev (collapse (match &wm (turn-mark $t $n) $n))))
+        (if (== $prev ()) (step-count) (car-atom $prev))))
 (= (current-turn)
    (let $t (collapse (match &wm (turn $x) $x)) (if (== $t ()) 0 (car-atom $t))))
 

@@ -24,10 +24,23 @@
        (error (unknown-skill $s))))
 
 ; ---------------- layer 1: symbolic ----------------
+; An open task has no tool results yet (a final answer closes the RUNNING task,
+; agent.metta). Tell the model exactly what to run: the tools of the task's skills.
+;   (t1 (run-first (calc)))    t1 uses skill math, which needs calc
+(= (task-tool-hint $id)
+   (let $tools (unique-atom (collapse (let $s (match &wm (task-skill $id $x) $x)
+                                           (match &caps (skill-needs $s $t) $t))))
+        ($id (run-first $tools))))
+
+(= (unfinished-problem)
+   (let* (($o (open-tasks))
+          ($hints (map-atom $o $id (task-tool-hint $id))))   ; bind: data is not evaluated
+         (unfinished $o "no tool results yet for these tasks: run the tools they need (run-first) and then send final; a task whose work needs no tool can be marked (task-done ID ...), several in ONE reply" $hints)))
+
 (= (symbolic-problems $answer)
    (collapse
      (superpose
-       ((if (all-done) (empty) (let $o (open-tasks) (unfinished $o)))
+       ((if (all-done) (empty) (unfinished-problem))
         (if (py-call (toolrunner.is_blank $answer)) empty-answer (empty))))))
 
 ; ---------------- layer 2: objective ----------------

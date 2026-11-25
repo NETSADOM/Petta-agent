@@ -67,9 +67,35 @@
 !(test (car-atom (relevant-skills "who founded the city with the largest population")) research)
 !(test (is-member data-analysis (relevant-skills "average revenue in the csv data")) True)
 !(test (car-atom (relevant-skills "debug my python code")) coding)
+; folder skill (skills/code-review): loaded, available, found by its words
+!(test (skill-available code-review) True)
+!(test (is-member code-review (relevant-skills "please review my script for bugs")) True)
+!(test (is-member code-review (relevant-skills "is this code readable? any risks?")) True)
+!(test (skill-files code-review) ("checklist.md"))
 
 ; ---------------- objective checks ----------------
 !(test (py-call (capability_checks.has_number "g" "about 42 km" "")) True)
 !(test (repr (py-call (capability_checks.number_is_observed "g" "it is 9999 m" "(ok 4550)")))
        "(error 9999 does not appear in any observation)")
 !(test (py-call (capability_checks.number_is_observed "g" "it is 4,550 m" "(ok 4550 metres)")) True)
+
+; ---------------- the "easy maths, skipped calc" case (seen live with gpt-oss on Groq) ----------------
+; 1. answer from its head → refused, and the hint names calc (the math skill's tool)
+; 2. calc → final → accepted, the math checks (has a number, calc ran) pass
+!(use-script ("(plan (task t1 \"calculate 15 percent of 2480\" (uses math)))"
+              "(final \"372\")"
+              "(action calc \"2480*0.15\")"
+              "(final \"372\")"))
+!(test (run-agent "what is 15 percent of 2480") (done "372"))
+!(test (match &wm (step 1 finish $a (error (verification-failed (($u $open $why $hints))))) $hints)
+       ((t1 (run-first (calc)))))
+!(test (match &wm (step 2 calc $i $o) (repr $o)) "(ok 372)")
+; calc ran under a task, but not for THIS answer? the math check still wants a calc result:
+!(use-script ("(plan (task t1 \"calculate 15 percent of 2480\" (uses math)))"
+              "(action memory-search \"15 percent of 2480\")"
+              "(final \"372\")"
+              "(action calc \"2480*0.15\")"
+              "(final \"372\")"))
+!(test (run-agent "what is 15 percent of 2480") (done "372"))
+!(test (match &wm (step 2 finish $a (error (verification-failed $p))) $p)
+       ((check-failed capability_checks.computed_by_tool "no calc result in the observations: run calc on the expression, then answer with its result")))

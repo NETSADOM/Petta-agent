@@ -13,6 +13,11 @@
 ;       auto-approve  module.function(input) → True when THIS input is harmless, so a
 ;                   needs-approval tool runs without asking (e.g. a read-only shell
 ;                   command). False, an error or a crash → you are asked as usual.
+;       remember-approval  yes | no: once you approve an exact (tool, input), the same
+;                   call runs without asking again for the rest of the session —
+;                   helpers included (their working memory starts empty). The prompt
+;                   also offers "a": allow this tool for the rest of the session.
+;                   Only for calls that are safe to repeat (http-get); default no.
 ;
 ;   (execute TOOL INPUT) → (ok X) | (error REASON)   — the only way tools run
 
@@ -26,6 +31,7 @@
 (default-tool-option allow-empty no)     ; yes for tools that need no input (list-files, now)
 (default-tool-option retry yes)
 (default-tool-option auto-approve none)
+(default-tool-option remember-approval no)
 
 ; ---------------- registry ----------------
 (= (declare-tool $name $desc $level $impl)
@@ -91,7 +97,9 @@
                         (if (needs-approval $tool)
                             (if (harmless $tool $input)
                                 (auto-approved $tool $input)
-                                (ask-approval $tool $input))
+                                (if (approved-before $tool $input)
+                                    (reused-approval $tool $input)
+                                    (ask-approval $tool $input)))
                             (deny $tool $input not-permitted))))))))
 
 ; the tool's own check says this input cannot do damage (e.g. `ls`, a new file)
@@ -105,10 +113,24 @@
          (run-retrying $tool $input 1)))
 
 (= (ask-approval $tool $input)
-   (let* (($yes (py-call (io_helper.confirm (py-call (ui.approval_question $tool $input)))))
+   (let* (($q (py-call (ui.approval_question $tool $input)))
+          ($yes (if (== (tool-option $tool remember-approval) yes)
+                    (py-call (io_helper.confirm_remembered $q $tool $input))   ; y / N / a(ll)
+                    (py-call (io_helper.confirm $q))))
           ($r (add-atom &wm (approval $tool $input $yes)))
           ($l (py-call (toolrunner.audit approval $tool $input $yes ""))))
          (if $yes (run-retrying $tool $input 1) (error denied-by-user))))
+
+; you already said yes to exactly this call in this session (remember-approval yes)
+(= (approved-before $tool $input)
+   (if (== (tool-option $tool remember-approval) yes)
+       (py-call (io_helper.approved_before $tool $input))
+       False))
+
+(= (reused-approval $tool $input)
+   (let* (($r (add-atom &wm (approval $tool $input remembered)))
+          ($l (py-call (toolrunner.audit approval $tool $input remembered ""))))
+         (run-retrying $tool $input 1)))
 
 ; ---------------- retry (recovery manager) ----------------
 ; Temporary errors are retried after a backoff, at most max-retries times.

@@ -18,8 +18,10 @@ Reply format:
 (plan (task t1 "what to do" (uses SKILL))
       (task t2 "what to do" (after t1)))
 Use only ids t1, t2, ... Use (after ID ...) for dependencies.
-Use (uses SKILL) when one of the recommended skills fits the task; only skills
-from the lists given. If steps/tasks so far are given, this is a REPLAN: keep
+Use (uses SKILL) when a skill fits the task. Any skill from "Available skills"
+may be used: the recommended ones are only PeTTa's best word matches, so read
+the descriptions and pick the skill that fits, matched or not. Never put a
+TOOL name in (uses ...). If steps/tasks so far are given, this is a REPLAN: keep
 what already worked and plan only the remaining work.
 Prefer the fewest tasks that achieve the goal.
 MISSING INFORMATION: if the goal depends on something only the user knows and
@@ -36,7 +38,8 @@ TASK: choose the single next step. Reply with ONE of:
                                           this turn (e.g. read three files); you see all
                                           results next turn. Not for calls that need an
                                           earlier call's result.
-(task-done TASK-ID)                       a plan task is finished (based on observations)
+(task-done TASK-ID ...)                   plan task(s) finished (based on observations);
+                                          several ids in one reply are fine: (task-done t1 t2)
 (task-failed TASK-ID "why")               a task cannot be done (its dependents get blocked)
 (replan "why")                            the plan no longer fits what you learned
 (missing-capability "what tool is needed") no tool in the catalog can do what is needed
@@ -49,14 +52,34 @@ TASK: choose the single next step. Reply with ONE of:
 (ask-user "question")                     ask the user; same as (action ask-user "question")
 Use (action send-message "text") to tell the user something during long work
 (progress, a partial result); it does not end the task — still give a final.
-If the catalog has delegate: for a big, self-contained part of a long goal, use
+If the catalog has delegate: ONLY for a big, independent part of a long goal
+that needs many tool calls of its own (5 or more), use
 (action delegate "complete sub-task with every detail") — a helper does it in a
-fresh context and returns its answer; your own context stays short.
-Only use tools listed in the catalog. Never invent tool names.
+fresh context and returns its answer. A helper is SLOW: it plans and fetches
+everything again. Never delegate small steps, summarizing, writing, or work on
+results you already have (a page you fetched, a file you read, search results):
+do those yourself, in this turn.
+SPEED: every turn costs time. Use the fewest turns: batch independent calls with
+(actions ...), never fetch the same thing twice (the latest results are shown in
+full — read them), and give the final answer as soon as the goal is met.
+Only use tools listed in the catalog. Never invent tool names. Skills are not
+tools: load one with (action read-skill "NAME"), never (action NAME ...).
+WEB PAGES: if http-get returns junk (code, styles, menus) or nothing on the topic,
+do not try to clean it with shell commands - use ANOTHER search result or search
+again. A RESULT marked repeated-result means you are going in circles: change
+approach. Send the user findings only after you have read real content.
 Every tool returns text. An (error "...") result is an observation, not the end:
 read why (missing file, bad input, timeout, non-zero exit code, denied) and act on it.
 Work on the CURRENT TASK; follow its skill guide if it has one.
-Mark every plan task done (or the final answer is rejected).
+SKILLS: if the current task has no guide, or another listed skill fits it better,
+use (action read-skill "NAME"): its full guide is then shown under CURRENT TASK.
+A guide may list extra files: read one only when you need it, with
+(action read-skill "NAME/FILE").
+EVIDENCE: do each task's work with its tools before answering - a calculation
+needs a calc result, even an easy one. An answer without tool results for its
+tasks is rejected. Once the current task's tool results are in, your final
+answer also closes it (no separate task-done turn). Every OTHER open task must
+be done first, or marked (task-done ID ...) / (task-failed ID "why").
 Read the steps so far: never repeat a step that already failed the same way
 (an identical failing call is refused, and refusing it again ends the run).
 The Goal is shown every turn: keep working toward ALL of it; older steps are
@@ -109,7 +132,7 @@ def act_system():
 
 # Hard bounds, whatever the session length: the step window (context.metta)
 # already keeps the history small; these caps are the last line of defence.
-STEPS_MAX = 16_000        # characters of step history in one prompt
+STEPS_MAX = 28_000        # characters of step history in one prompt (the latest turn alone may use 12000)
 FACTS_MAX = 3_000
 
 
@@ -136,7 +159,8 @@ def plan_prompt(goal, tools, skills, recommended, tasks, steps, facts, episodes,
         "Tool catalog (name description permission):", _data("tools", tools),
         "Available skills (name description):", _data("skills", skills),
         # skill guides are written by the developer: trusted, outside <data>
-        "Recommended skills for this goal, with their guides (trusted, from the developer):",
+        "Recommended skills for this goal - summaries, the full guide is shown when a task"
+        " uses the skill (trusted, from the developer):",
         str(recommended),
         "Previous plan (empty unless replanning):", _data("tasks", tasks),
         "Steps so far (n tool input outcome):", _data("steps", cap(steps, STEPS_MAX)),
@@ -159,7 +183,7 @@ def progress_text(turn, max_turns):
 
 
 def act_prompt(goal, tasks, current, steps, tools, facts, hints="none",
-               turn=None, max_turns=None, session="none"):
+               turn=None, max_turns=None, session="none", skills="none"):
     return "\n".join([
         "Goal:", _data("goal", goal),
         "PROGRESS: " + progress_text(turn, max_turns),
@@ -167,6 +191,7 @@ def act_prompt(goal, tasks, current, steps, tools, facts, hints="none",
         "Plan (id description status):", _data("tasks", tasks),
         "CURRENT TASK (id description skill-guides) - guides are trusted, from the developer:",
         str(current),
+        "Skills you can load with read-skill (name description):", str(skills),
         "Steps so far (n tool input outcome):", _data("steps", cap(steps, STEPS_MAX)),
         # computed by PeTTa, but contains tool error text → untrusted data
         "RECOVERY HINTS for the last failure (class, alternatives, fixes that worked before):",

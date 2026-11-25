@@ -12,6 +12,7 @@ checks, call limit, permission, timeout) — the limits below are a second wall.
     run-python   a Python snippet in a separate, resource-limited process needs-approval
     run-shell    a shell command in the workspace, killed after 60 s      needs-approval
     http-get     GET a public http(s) URL (private addresses refused)     needs-approval
+    arxiv-search arXiv papers with abstracts (export.arxiv.org API)       safe
     now          current date and time                                    safe
 
 Workspace: PAGENT_WORKSPACE (default <project>/workspace). Nothing outside it
@@ -23,6 +24,7 @@ exit) come back as ["error", "why"], never as an exception.
 import ast
 import datetime
 import html
+import html.parser
 import ipaddress
 import json
 import operator
@@ -38,6 +40,7 @@ import urllib.request
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 USER_AGENT = "P-agent/0.1 (educational research agent; urllib)"
 MAX_READ = 200_000
+MAX_HTML = 3_000_000      # web pages: heavy <head>s (inline CSS, preloads) come before the article
 
 
 def workspace():
@@ -202,6 +205,108 @@ def _os_error(action, name, e):
     return ["error", f"cannot {action} {name}: {why}"]
 
 
+# ---------------- HTML → readable text (http-get, read-file of .html) ----------------
+# Modern pages put 100 KB+ of inline CSS, preloads and comments before the
+# article. A regex strip fails on an unclosed or multi-line block, and the model
+# then sees only that junk. A real parser drops comments, <head>, scripts,
+# styles and page chrome, and prefers the <article>/<main> part when there is one.
+_SKIP_TAGS = {"head", "script", "style", "noscript", "template", "svg", "iframe",
+              "nav", "footer", "header", "aside", "form", "button", "select"}
+_BLOCK_TAGS = {"p", "div", "section", "article", "main", "br", "li", "ul", "ol", "tr",
+               "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote", "table", "dd", "dt"}
+_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+              "meta", "source", "track", "wbr"}
+
+
+class _TextExtractor(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.title = ""
+        self.skip = 0                 # depth inside skipped tags
+        self.in_title = False
+        self.main_depth = 0           # depth inside <article>/<main>
+        self.all_parts, self.main_parts = [], []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _VOID_TAGS:
+            if tag == "br":
+                self._add("\n")
+            return
+        if tag == "title":
+            self.in_title = True
+        if tag in _SKIP_TAGS:
+            self.skip += 1
+        elif tag in ("article", "main"):
+            self.main_depth += 1
+        if tag in _BLOCK_TAGS:
+            self._add("\n")
+        if tag in ("h1", "h2", "h3", "h4"):
+            self._add("# " if tag == "h1" else "## ")
+        if tag == "li":
+            self._add("- ")
+
+    def handle_endtag(self, tag):
+        if tag in _VOID_TAGS:
+            return
+        if tag == "title":
+            self.in_title = False
+        if tag in _SKIP_TAGS:
+            self.skip = max(0, self.skip - 1)
+        elif tag in ("article", "main") and self.main_depth:
+            self.main_depth -= 1
+        if tag in _BLOCK_TAGS:
+            self._add("\n")
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.title += data
+        self._add(data)
+
+    def _add(self, text):
+        if self.skip:
+            return
+        self.all_parts.append(text)
+        if self.main_depth:
+            self.main_parts.append(text)
+
+
+def _tidy(parts):
+    out, blank = [], False
+    for line in "".join(parts).split("\n"):
+        line = " ".join(line.split())
+        if line in ("", "#", "##", "-"):
+            if out and not blank:
+                out.append("")
+                blank = True
+        else:
+            out.append(line)
+            blank = False
+    return "\n".join(out).strip()
+
+
+def html_to_text(body):
+    """Readable text of an HTML page: its title + the article (or the whole body)."""
+    p = _TextExtractor()
+    try:
+        p.feed(body)
+        p.close()
+    except Exception:
+        pass
+    main, whole = _tidy(p.main_parts), _tidy(p.all_parts)
+    text = main if len(main) >= 500 else whole     # a tiny <main> is usually a teaser
+    title = " ".join(p.title.split())
+    if title and title not in text[:300]:
+        text = f"{title}\n\n{text}"
+    return text or "(the page has no readable text: it may need JavaScript; try another source)"
+
+
+def looks_like_html(text, name=""):
+    if str(name).lower().endswith((".html", ".htm", ".xhtml")):
+        return True
+    head = text.lstrip()[:1000].lower()
+    return head.startswith(("<!doctype html", "<html")) or "<html" in head
+
+
 def read_file(name):
     try:
         path = _inside(name)
@@ -213,7 +318,7 @@ def read_file(name):
         return ["error", f"no such file: {name} (use list-files)"]
     try:
         with open(path, "rb") as f:
-            raw = f.read(MAX_READ + 1)
+            raw = f.read(MAX_HTML + 1)
     except OSError as e:
         return _os_error("read", name, e)
     if b"\x00" in raw[:8192]:
@@ -221,6 +326,8 @@ def read_file(name):
     text = raw.decode("utf-8", errors="replace")
     if not text:
         return ["ok", f"(the file {name} is empty)"]
+    if looks_like_html(text, name):      # a saved web page: its readable text, not its markup
+        text = "(HTML file: showing its readable text)\n" + html_to_text(text)
     return ["ok", text[:MAX_READ] + ("\n...[file truncated]" if len(text) > MAX_READ else "")]
 
 
@@ -462,8 +569,24 @@ class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_CheckedRedirect)
 
 
+_TEXT_TYPES = ("text/", "json", "xml", "javascript", "csv", "yaml", "markdown")
+_ARXIV_PDF = re.compile(r"^https?://(?:www\.|export\.)?arxiv\.org/pdf/([^?#]+?)(?:\.pdf)?/?$", re.I)
+
+
+def _binary_hint(url, ctype, size):
+    kind = ctype.split(";")[0].strip() or "binary data"
+    return (f"{url} is a binary file ({kind}{f', {size} bytes' if size else ''}), not text: it cannot be read. "
+            "Use the page ABOUT it instead (for a paper: its abstract page, or arxiv-search), "
+            "or another source.")
+
+
 def http_get(url):
     url = str(url).strip()
+    note = ""
+    m = _ARXIV_PDF.match(url)
+    if m:      # an arXiv PDF is binary: its abstract page has the title, authors and abstract
+        url = f"https://arxiv.org/abs/{m.group(1)}"
+        note = f"(arXiv PDF -> its abstract page {url})\n"
     parts = urllib.parse.urlparse(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         return ["error", "only http(s) URLs are allowed"]
@@ -472,7 +595,11 @@ def http_get(url):
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         with _OPENER.open(req, timeout=10) as r:
             ctype = r.headers.get("Content-Type", "")
-            body = r.read(100_000).decode("utf-8", errors="replace")
+            if ctype and not any(t in ctype.lower() for t in _TEXT_TYPES):
+                # PDF, image, zip ...: refused BEFORE downloading (a PDF took 20 s and was junk)
+                return ["error", _binary_hint(url, ctype, r.headers.get("Content-Length"))]
+            raw = r.read(MAX_HTML)
+            charset = r.headers.get_content_charset() or "utf-8"
             status = r.status
     except ValueError as e:
         return ["error", str(e)]
@@ -480,11 +607,80 @@ def http_get(url):
         return ["error", f"HTTP {e.code}" + (" (temporary)" if e.code >= 500 or e.code == 429 else "")]
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         return ["error", f"network unavailable: {e}"]
-    if "html" in ctype:
-        body = re.sub(r"(?s)<(script|style).*?</\1>", " ", body)
-        body = html.unescape(re.sub(r"<[^>]+>", " ", body))
-        body = " ".join(body.split())
-    return ["ok", f"HTTP {status} {ctype}\n{body}"]
+    if b"\x00" in raw[:8192]:            # no/odd Content-Type, but binary bytes
+        return ["error", _binary_hint(url, ctype, len(raw))]
+    try:
+        body = raw.decode(charset, errors="replace")
+    except LookupError:                  # unknown charset name in the header
+        body = raw.decode("utf-8", errors="replace")
+    if "html" in ctype or looks_like_html(body):
+        body = html_to_text(body)
+    return ["ok", f"{note}HTTP {status} {ctype}\n{body}"]
+
+
+# ---------------- arxiv-search: papers with their abstracts in ONE call ----------------
+# The arXiv API (no key) returns title, authors, date, link and abstract. Finding
+# and summarizing papers then needs one call instead of a web search, a listing
+# page and an http-get per paper. Read-only and to one fixed host: safe.
+ARXIV_API = "https://export.arxiv.org/api/query"
+_ATOM = "{http://www.w3.org/2005/Atom}"
+_CATEGORY = re.compile(r"^[a-z\-]+(\.[A-Za-z\-]+)?$")    # cs.LG, stat.ML, math.OC, hep-th
+
+
+def arxiv_query(text):
+    """'latest machine learning | 5' → (search_query, sortBy, max_results)."""
+    text = " ".join(str(text).split())
+    count = 5
+    if "|" in text:
+        text, n = text.rsplit("|", 1)
+        if n.strip().isdigit():
+            count = max(1, min(int(n.strip()), 10))
+        text = text.strip()
+    words = text.split()
+    latest = bool(words) and words[0].lower() in ("latest", "newest", "recent")
+    if latest:
+        words = words[1:]
+    cats = [w for w in words if _CATEGORY.match(w) and "." in w]
+    terms = [re.sub(r"[^\w\-]", "", w) for w in words if w not in cats]
+    terms = [t for t in terms if t]
+    parts = [f"cat:{c}" for c in cats] + [f"all:{t}" for t in terms]
+    query = " AND ".join(parts)
+    return query, ("submittedDate" if latest else "relevance"), count
+
+
+def arxiv_search(text):
+    import xml.etree.ElementTree as ET
+    query, sort, count = arxiv_query(text)
+    if not query:
+        return ["error", "give search words, e.g. 'latest machine learning' or 'latest cs.LG | 5'"]
+    url = ARXIV_API + "?" + urllib.parse.urlencode({
+        "search_query": query, "sortBy": sort, "sortOrder": "descending",
+        "start": 0, "max_results": count})
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with _OPENER.open(req, timeout=25) as r:
+            data = r.read(2_000_000)
+    except urllib.error.HTTPError as e:
+        return ["error", f"arXiv API HTTP {e.code}" + (" (temporary)" if e.code >= 500 or e.code == 429 else "")]
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return ["error", f"network unavailable: {e}"]
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as e:
+        return ["error", f"arXiv API reply was not XML (temporary?): {e}"]
+    out = []
+    for i, e in enumerate(root.findall(_ATOM + "entry"), 1):
+        def get(tag):
+            node = e.find(_ATOM + tag)
+            return " ".join((node.text or "").split()) if node is not None else ""
+        authors = [" ".join((a.findtext(_ATOM + "name") or "").split()) for a in e.findall(_ATOM + "author")]
+        who = ", ".join(authors[:4]) + (f" + {len(authors) - 4} more" if len(authors) > 4 else "")
+        out.append(f"{i}. {get('title')}\n   authors: {who}\n   published: {get('published')[:10]}"
+                   f"   updated: {get('updated')[:10]}\n   url: {get('id')}\n   abstract: {get('summary')}")
+    if not out:
+        return ["ok", f"no arXiv papers found for: {query} (try fewer or other words)"]
+    order = "newest first" if sort == "submittedDate" else "most relevant first"
+    return ["ok", f"arXiv papers for: {query} ({order})\n\n" + "\n\n".join(out)]
 
 
 def now(_=None):

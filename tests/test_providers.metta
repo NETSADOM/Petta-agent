@@ -62,6 +62,13 @@
              ($b (py-call (fake_openai.set_env "OPENAI_BASE_URL" $saved))))
             (test (index-atom $r 1) network)))
 
+; an EMPTY reply (thinking models) is asked again once ...
+!(py-call (fake_openai.queue_replies ("" "(final \"second try\")")))
+!(test (repr (ask-llm "s" "p")) "(ok (final \"second try\"))")
+; ... and if it stays empty it is an invalid reply for the agent, never a fatal stop
+!(py-call (fake_openai.queue_replies ("" "")))
+!(test (let (ok $t) (ask-llm "s" "p") (parse-reply $t)) (invalid no-expression))
+
 ; native tool_calls are understood
 !(py-call (fake_openai.set_env "OPENAI_MODEL" "tool-caller"))
 !(declare-tool calc "arithmetic" safe fake_tools.upper)

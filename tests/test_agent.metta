@@ -86,7 +86,35 @@
               "(final \"give up waiting\")"))
 !(test (run-agent "x") (done-unverified "give up waiting"))
 !(test (count-errors finish) 2)
-!(test (match &wm (step 1 finish $a $o) $o) (error (verification-failed ((unfinished (t1 t2))))))
+!(test (match &wm (step 1 finish $a (error (verification-failed (($u $open $why $hints))))) ($u $open $hints))
+       (unfinished (t1 t2) ((t1 (run-first ())) (t2 (run-first ())))))
+
+; ===== 5b. final closes the task being worked on: no extra task-done turn =====
+!(use-script ("(plan (task t1 \"shout\"))"
+              "(action upper \"hi\")"
+              "(final \"HI\")"))
+!(test (run-agent "shout hi") (done "HI"))
+!(test (count-errors finish) 0)
+!(test (status-of t1) completed)
+!(test (match &wm (step $n task-done t1 $o) $o) (ok completed-with-final))
+
+; a task never started still blocks the final answer
+!(use-script ("(plan (task t1 \"shout\") (task t2 \"whisper\"))"
+              "(action upper \"hi\")"
+              "(final \"HI\")"
+              "(task-done t2)"
+              "(final \"HI\")"))
+!(test (run-agent "shout and whisper") (done "HI"))
+!(test (count-errors finish) 1)
+!(test (match &wm (step $n finish $a (error (verification-failed (($u $open $why $hints))))) $open) (t2))
+
+; ===== 5c. several tasks done in ONE reply =====
+!(use-script ("(plan (task t1 \"a\") (task t2 \"b\") (task t3 \"c\"))"
+              "(task-done t1 t2 t3)"
+              "(final \"all done\")"))
+!(test (run-agent "abc") (done "all done"))
+!(test (collapse (match &wm (step $n task-done $id (ok completed)) $id)) (t1 t2 t3))
+!(test (check-proposal (task-done t1 "t2")) (invalid bad-shape))
 
 ; ===== 6. needs-approval tool, user says "n" → denied, tool NOT run =====
 !(use-script ("(plan (task t1 \"save\"))"

@@ -95,5 +95,5 @@
 
 ; ---------------- the prompt stays bounded ----------------
 !(test (py-call (operator.eq (py-call (prompts.cap "abcdefghij" 4)) "[6 older characters cut]ghij")) True)
-; 50 000 characters of step history → at most STEPS_MAX (16 000) in the prompt
-!(test (< (py-call (toolrunner.length (py-call (prompts.act_prompt "g" "t" "c" (py-call (fake_tools.big_text 1 50000)) "tools" "facts" "none" 1 40 "none")))) 18000) True)
+; 50 000 characters of step history → at most STEPS_MAX (28 000) in the prompt
+!(test (< (py-call (toolrunner.length (py-call (prompts.act_prompt "g" "t" "c" (py-call (fake_tools.big_text 1 50000)) "tools" "facts" "none" 1 40 "none")))) 30000) True)

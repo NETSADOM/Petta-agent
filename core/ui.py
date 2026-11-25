@@ -125,7 +125,7 @@ def render(event):
     elif kind == "gemini-reply":
         _out(dim(f"  · ignored unusable reply: {fmt(a[0])}"))
     elif kind == "gemini-error":
-        _out(yellow(f"  ⚠ Gemini error: {fmt(a[0])} — retrying"))
+        _out(yellow(f"  ⚠ LLM error: {fmt(a[0])} — retrying"))
     elif kind == "sub-agent-start":
         _out(cyan("  ⤷ helper agent starts: ") + fmt(a[0], 200))
         _DEPTH["n"] += 1
@@ -157,7 +157,9 @@ def _why(reason):
         "repeated-failure": "I kept trying the same failing step: " + fmt(r[1:], 120),
         "no-progress": "My last steps all failed, so I stopped instead of guessing.",
         "too-many-invalid-replies": "The language model kept giving replies I could not use.",
-        "error": "The language model could not be reached: " + fmt(r[1:], 160),
+        "error": ("The language model's usage limit is used up: " + fmt(r[2:], 400)
+                  if len(r) > 1 and str(r[1]) == "quota"
+                  else "The language model could not be reached: " + fmt(r[1:], 160)),
     }.get(kind, fmt(r, 200))
 
 

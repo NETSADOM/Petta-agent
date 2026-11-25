@@ -165,3 +165,66 @@ def timed(spec, *args):
     start = time.time()
     getattr(importlib.import_module(module), name)(*args)
     return round(time.time() - start)
+
+
+def html_fixture_ok(_=None):
+    """A heavy page: unclosed-looking head CSS, multi-line comments, nav, an article."""
+    import agent_tools
+    page = ("<!doctype html><html><head><title>Loops guide</title>"
+            "<!-- Critical font preloads\n spanning lines -->"
+            "<style>" + ".a{color:red}" * 20000 + "</style>"
+            "<script>var x = '<p>not text</p>';</script></head><body>"
+            "<nav><a>Home</a><a>Blog</a></nav><article><h1>Agentic loops</h1>"
+            "<p>" + "Loop engineering matters. " * 30 + "</p><ul><li>ReAct</li><li>Reflexion</li></ul>"
+            "</article><footer>Subscribe</footer></body></html>")
+    text = agent_tools.html_to_text(page)
+    return (text.startswith("Loops guide") and "# Agentic loops" in text and "- ReAct" in text
+            and "color:red" not in text and "not text" not in text and "preloads" not in text
+            and "Home" not in text and "Subscribe" not in text
+            and agent_tools.looks_like_html(page) and not agent_tools.looks_like_html("a,b\n1,2", "x.csv"))
+
+
+def speed_fixes_ok(_=None):
+    """Python side of the speed fixes (no network)."""
+    import builtins
+    import agent_tools
+    import io_helper
+    import openai_compat
+    import gemini
+    checks = []
+    # arxiv-search input parsing
+    checks.append(agent_tools.arxiv_query("latest cs.LG | 3") == ("cat:cs.LG", "submittedDate", 3))
+    checks.append(agent_tools.arxiv_query("vision transformers") ==
+                  ("all:vision AND all:transformers", "relevance", 5))
+    checks.append(agent_tools.arxiv_query("recent machine learning | 99")[1:] == ("submittedDate", 10))
+    # arXiv PDF links go to the abstract page
+    m = agent_tools._ARXIV_PDF.match("https://arxiv.org/pdf/2405.00074.pdf")
+    checks.append(bool(m) and m.group(1) == "2405.00074")
+    checks.append(agent_tools._ARXIV_PDF.match("https://arxiv.org/pdf/2309.16588v2").group(1) == "2309.16588v2")
+    checks.append(not agent_tools._ARXIV_PDF.match("https://arxiv.org/abs/2405.00074"))
+    # a daily limit is not retried
+    checks.append(gemini.is_temporary("rate-limit") and not gemini.is_temporary("quota"))
+    checks.append(openai_compat.name_of_limit("on tokens per day (TPD): Limit 200000") ==
+                  "the provider's DAILY limit")
+    checks.append(openai_compat._pretty_wait(1139.4) == "18 min 59 s")
+    # "a" at the approval prompt: the tool is allowed for the rest of the session
+    real_input = builtins.input
+    try:
+        builtins.input = lambda prompt="": "a"
+        checks.append(io_helper.confirm_remembered("allow?", "web-tool", "http://x/1") is True)
+        checks.append(io_helper.approved_before("web-tool", "http://other/2"))
+        checks.append(not io_helper.approved_before("other-tool", "http://x/1"))
+        builtins.input = lambda prompt="": "y"
+        checks.append(io_helper.confirm_remembered("allow?", "web-tool-2", "u1") is True)
+        checks.append(io_helper.approved_before("web-tool-2", "u1")
+                      and not io_helper.approved_before("web-tool-2", "u2"))
+        builtins.input = lambda prompt="": "n"
+        checks.append(io_helper.confirm_remembered("allow?", "web-tool-3", "u1") is False)
+    finally:
+        builtins.input = real_input
+        io_helper.forget_approvals()
+    return all(checks) or [i for i, c in enumerate(checks) if not c]
+
+
+def long_text(n):
+    return "word " * (int(n) // 5)

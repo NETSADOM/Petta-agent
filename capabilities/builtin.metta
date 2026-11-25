@@ -39,9 +39,16 @@
 !(set-tool-option run-shell timeout 75)     ; > the 60s kill inside run_shell, so it reports first
 !(set-tool-option run-shell retry no)       ; a command with side effects must not run twice
 
-!(declare-tool http-get "GET a public http(s) URL (e.g. a JSON API) and return the body as text" needs-approval agent_tools.http_get)
+!(declare-tool http-get "GET a public http(s) URL (e.g. a JSON API or an article) and return the body as text; for a web page, only its readable text (menus, scripts and styles removed). If a page comes back unreadable or off-topic, use another search result instead of retrying it." needs-approval agent_tools.http_get)
 !(set-tool-option http-get pattern "https?://\\S+")
 !(set-tool-option http-get timeout 20)
+!(set-tool-option http-get max-output 15000)   ; a page's readable text, not just its first lines
+!(set-tool-option http-get remember-approval yes) ; a GET is safe to repeat: approve a URL once per session
+
+!(declare-tool arxiv-search "search arXiv research papers; returns title, authors, date, url and the full ABSTRACT of each (no http-get needed). Input: search words, optionally starting with latest (newest first instead of most relevant), and | N for how many (1-10, default 5). A category like cs.LG (machine learning), cs.AI, cs.CL (NLP), cs.CV (vision), stat.ML is matched exactly. Examples: latest cs.LG | 5   or   vision transformers registers" safe agent_tools.arxiv_search)
+!(set-tool-option arxiv-search timeout 30)
+!(set-tool-option arxiv-search max-length 300)
+!(set-tool-option arxiv-search max-output 15000)
 
 !(declare-tool now "the current date and time (input: anything)" safe agent_tools.now)
 !(set-tool-option now allow-empty yes)
@@ -75,9 +82,9 @@
 !(declare-skill research "find facts and answer factual questions"
                 (web-search wiki-search memory-search)
                 (who what when where which find search research history born capital population largest highest founded invented area height wikipedia))
-!(set-skill-info research procedure "1. memory-search first: it may already be known. 2. web-search (current or specific facts) or wiki-search (encyclopedic facts) with a SHORT query. 3. If the snippets lack the fact, http-get the best url or search again with different words. 4. Answer only from observations and name the source.")
+!(set-skill-info research procedure "1. memory-search first: it may already be known. 2. web-search (current or specific facts) or wiki-search (encyclopedic facts) with a SHORT query. 3. If the snippets lack the fact, http-get the best url or search again with different words. 4. For trends, overviews or a report: read 2-3 DIFFERENT sources (http-get several results, or search with other words), not just the first hit. 5. Answer only from observations and name every source.")
 !(set-skill-info research output "the answer + which article it came from")
-!(set-skill-info research on-error "if wiki-search fails twice, try http-get on https://en.wikipedia.org/wiki/TITLE, or say what could not be found")
+!(set-skill-info research on-error "if wiki-search fails twice, try http-get on https://en.wikipedia.org/wiki/TITLE. If a page is unreadable or off-topic, move to the next search result - never clean HTML with shell commands. Otherwise say what could not be found")
 !(set-skill-verifier research capability_checks.number_is_observed)
 
 !(declare-skill math "solve calculations and word problems"
@@ -87,6 +94,7 @@
 !(set-skill-info math output "the number, with units")
 !(set-skill-info math on-error "if calc rejects the input, rewrite it with only digits and + - * / ( ) and retry")
 !(set-skill-verifier math capability_checks.has_number)
+!(set-skill-verifier math capability_checks.computed_by_tool)   ; calc must have run
 
 !(declare-skill file-analysis "answer questions about files in the workspace"
                 (list-files read-file)
@@ -116,9 +124,16 @@
 !(set-skill-info shell output "what the command showed, quoted exactly where it matters")
 !(set-skill-info shell on-error "exit code 127 = command not found: try another program; 'killed: still running' = make the command smaller or non-interactive; denied = do it another way or ask-user")
 
+!(declare-skill papers "find recent research papers and summarize them"
+                (arxiv-search write-file)
+                (paper papers arxiv preprint preprints publication publications journal conference))
+!(set-skill-info papers procedure "1. arxiv-search ONCE: latest + a category for the newest papers of a field (cs.LG machine learning, cs.AI, cs.CL language, cs.CV vision, stat.ML), or plain words for the most relevant ones; | N for how many. Its results already contain each abstract: do not http-get the papers or their PDFs. 2. Pick the papers that best fit the goal. 3. Summarize each from its abstract yourself (do not delegate): title, authors, date, 2-4 key points, url. 4. To save them: ONE write-file (e.g. papers_summary.md). 5. Final answer: the summaries and the file name.")
+!(set-skill-info papers output "for each paper: title, authors, date, key points, link; plus the saved file name")
+!(set-skill-info papers on-error "if arxiv-search finds nothing, use fewer words or a category; if it is unreachable, web-search and http-get the arxiv.org/abs/ pages")
+
 !(declare-skill summarization "summarise a document"
                 (read-file)
                 (summarise summarize summary tldr overview brief shorten key points))
-!(set-skill-info summarization procedure "1. read-file. 2. Pick the 3-5 most important points. 3. Write them in plain language; keep names and numbers exact.")
+!(set-skill-info summarization procedure "1. Use the text already in the steps (a fetched page, search results, abstracts); read-file only when it is in a file. 2. Pick the 3-5 most important points. 3. Write them in plain language; keep names and numbers exact.")
 !(set-skill-info summarization output "a short summary that keeps key names and figures")
 !(set-skill-info summarization on-error "if the file is too long, summarise what was read and say it was truncated")

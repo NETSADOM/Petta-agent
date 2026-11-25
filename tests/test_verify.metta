@@ -2,6 +2,7 @@
 
 !(import! &self ../core/agent)
 !(import! &self "fake_tools.py")
+!(import! &self "../capabilities/capability_checks.py")
 !(set-config retry-backoff 0)
 !(declare-tool upper "uppercase" safe fake_tools.upper)
 
@@ -10,7 +11,19 @@
 ; ---------------- layer 1: symbolic ----------------
 !(clear-wm)
 !(load-plan (plan (task t1 "a") (task t2 "b")))
-!(test (symbolic-problems "x") ((unfinished (t1 t2))))
+!(test (index-atom (car-atom (symbolic-problems "x")) 1) (t1 t2))
+; the hint names the tools each open task's skills need
+!(test (index-atom (car-atom (symbolic-problems "x")) 3) ((t1 (run-first ())) (t2 (run-first ()))))
+!(declare-skill hinting "for the hint test" (upper) (hint))
+!(add-atom &wm (task-skill t2 hinting))
+!(test (index-atom (car-atom (symbolic-problems "x")) 3) ((t1 (run-first ())) (t2 (run-first (upper)))))
+!(remove-atom &wm (task-skill t2 hinting))
+
+; the math check: a calc (or run-python) RESULT must be in the observations
+!(test (py-call (capability_checks.computed_by_tool "g" "372" "((1 calc \"2480*0.15\" (ok 372)))")) True)
+!(test (car-atom (py-call (capability_checks.computed_by_tool "g" "372" "()"))) error)
+!(test (car-atom (py-call (capability_checks.computed_by_tool "g" "372" "((1 calc \"2480*x\" (error bad-input)))"))) error)
+!(test (py-call (capability_checks.computed_by_tool "g" "5" "((1 run-python \"print(2+3)\" (ok 5)))")) True)
 !(set-status t1 completed)
 !(set-status t2 completed)
 !(test (symbolic-problems "x") ())

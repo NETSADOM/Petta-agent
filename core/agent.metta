@@ -192,27 +192,78 @@
                  ran))
        (let* (($task (start-current-task))          ; pending → running
               ($s1 (show (step $i $task $tool $input)))
-              ($out (execute $tool $input))
+              ($out (flag-repeat (execute-call $tool $input)))
               ($s2 (show (result $out)))
               ($r (record-step $tool $input $out)))
              ran)))
+
+; Models often call a SKILL as if it were a tool, e.g. (action summarization "x").
+; Instead of a bare unknown-tool error (and a wasted turn), the skill is loaded
+; and the model is told what happened.
+(= (execute-call $tool $input)
+   (if (and (not (tool-known $tool)) (skill-known $tool))
+       (let $r (execute read-skill (repr $tool))
+            (if (== (car-atom $r) ok)
+                (ok (skill-not-tool $tool "is a SKILL, not a tool: its guide is now loaded (that is what read-skill does). Do the work with tools from the catalog, following the guide."
+                                    (index-atom $r 1)))
+                $r))
+       (execute $tool $input)))
+
+; Loop guard for SUCCESSFUL calls: a result identical to an earlier step's
+; (the same page re-read, a "cleaned" copy that is still the same junk) means
+; the approach is not making progress. The result is kept, but the model is
+; told so in front of it — the clipped step history still shows the warning.
+; Short results ("exit code 0 (no output)") repeat legitimately and are skipped.
+(= (flag-repeat $out)
+   (if (and (is-expression $out) (== (car-atom $out) ok))
+       (let $prev (collapse (match &wm (step $n $t $i $out) $n))
+            (if (or (== $prev ()) (< (py-call (toolrunner.length (index-atom $out 1))) 200))
+                $out
+                (ok (repeated-result (same-as-steps $prev)
+                                     "SAME result as before: this approach is not making progress. Use another source or tool, or finish with what you have."
+                                     (index-atom $out 1)))))
+       $out))
 
 ; real failures of this exact call (refusals not counted)
 (= (count-errors-of $tool $input)
    (size-atom (collapse (match &wm (step $n $tool $input (error $e))
                                (if (and (is-expression $e) (== (car-atom $e) repeated-call)) (empty) $n)))))
 
-(= (do-task-done $p $i)
-   (let* (($id (index-atom $p 1))
-          ($known (not (== (collapse (status-of $id)) ())))
-          ($out (if $known
+(= (task-exists $id) (not (== (collapse (status-of $id)) ())))
+
+; (task-done t1) or (task-done t1 t2 t3): several tasks in ONE reply (one LLM call)
+(= (mark-done $id)
+   (let* (($out (if (task-exists $id)
                     (let $r (set-status $id completed) (ok completed))
                     (error unknown-task)))
           ($s (show (task-done $id $out)))
           ($r2 (record-step task-done $id $out)))
+         $out))
+
+(= (do-task-done $p $i)
+   (let* (($ids (cdr-atom $p))                  ; bind first: superpose does not evaluate
+          ($rs (collapse (let $id (superpose $ids) (mark-done $id)))))
          (continue $i)))
 
-(= (task-exists $id) (not (== (collapse (status-of $id)) ())))
+; A final answer closes the task being worked on: its tools ran (status
+; running) and the model now says the goal is reached. Sending (task-done ..)
+; first cost an extra LLM call every goal, and models often skip it. Tasks that
+; were never started stay open, so skipped work is still caught by verification.
+; The closing is PROVISIONAL: verification runs with these tasks completed;
+; accepted → recorded as steps, refused → back to running (work goes on).
+(= (close-running-tasks)
+   (let $ids (running-tasks)
+        (collapse (let $id (superpose $ids) (let $r (set-status $id completed) $id)))))
+
+(= (reopen-tasks $ids)
+   (collapse (let $id (superpose $ids) (set-status $id running))))
+
+(= (record-closed $ids)
+   (collapse (let $id (superpose $ids)
+                  (let* (($out (ok completed-with-final))
+                         ($s (show (task-done $id $out)))
+                         ($r (record-step task-done $id $out)))
+                        $id))))
 
 ; the task failed: dependents (and their dependents) become blocked
 (= (do-task-failed $p $i)
@@ -264,12 +315,14 @@
 ; with the reasons; after max-final-rejections → done-unverified (never silent).
 (= (do-final $p $i)
    (let* (($answer (index-atom $p 1))
+          ($closed (close-running-tasks))
           ($problems (verify-answer $answer)))
          (if (== $problems ())
-             (done $answer)
+             (let $c (record-closed $closed) (done $answer))
              (if (>= (count-errors finish) (config-value max-final-rejections))
-                 (done-unverified $answer)
-                 (let* (($s (show (final-rejected $problems)))
+                 (let $c (record-closed $closed) (done-unverified $answer))
+                 (let* (($o (reopen-tasks $closed))
+                        ($s (show (final-rejected $problems)))
                         ($r (record-step finish $answer (error (verification-failed $problems)))))
                        (continue $i))))))
 
@@ -335,3 +388,48 @@
    (if (== (config-value agent-depth) 0)
        (run-helper $subgoal)
        (error "a helper cannot start another helper: do this step yourself")))
+
+; ================================================================ skills on demand
+; (action read-skill "NAME")       attach skill NAME to the current task: from
+;                                  now on its FULL guide is in every act prompt
+;                                  (and its verifiers check the final answer)
+; (action read-skill "NAME/FILE")  one extra file of a folder skill (skills.metta)
+; The planner's keyword matches are only a start: the model can pull in any
+; available skill when it sees it needs one.
+!(declare-tool read-skill "load a skill's full guide into the current task (input: the skill name, e.g. research), or read one extra file of a skill (input: NAME/FILE, e.g. code-review/checklist.md)" safe metta)
+!(set-tool-option read-skill max-length 200)
+!(set-tool-option read-skill max-output 13000)
+!(set-tool-option read-skill retry no)
+
+(= (attach-skill $s)
+   (let $t (current-task)
+        (if (== $t none)
+            (let $v (skill-view $s)
+                 (ok (py-call (skill_files.render ($v) (config-value skill-guide-chars)))))
+            (let* (($r (if (== (collapse (match &wm (task-skill $t $s) yes)) ())
+                           (add-atom &wm (task-skill $t $s))
+                           ()))
+                   ($files (skill-files $s)))
+                  (ok (skill-loaded $s (for-task $t) "its full guide is now shown under CURRENT TASK"
+                                    (files $files)))))))
+
+(= (read-skill-file $s $rel)
+   (let $dir (skill-folder $s)
+        (if (== $dir none)
+            (error (no-extra-files $s "this skill is written in MeTTa: its whole guide is read-skill NAME"))
+            (py-call (skill_files.read_resource $dir $rel)))))
+
+(= (metta-tool read-skill $in)
+   (let $spec (py-call (skill_files.split_spec $in))
+        (if (== (car-atom $spec) error)
+            (error (index-atom $spec 1))
+            (let $s (index-atom $spec 1)
+                 (if (not (skill-known $s))
+                     (let $names (map-atom (skill-catalog) $c (car-atom $c))
+                          (error (unknown-skill $s (available $names))))
+                     (if (not (skill-available $s))
+                         (let $miss (missing-tools $s)
+                              (error (skill-unavailable $s (missing-tools $miss))))
+                         (if (== (car-atom $spec) skill)
+                             (attach-skill $s)
+                             (read-skill-file $s (index-atom $spec 2)))))))))

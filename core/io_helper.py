@@ -35,6 +35,51 @@ def confirm(question):
     return answer in ("y", "yes")
 
 
+# ---------------- approvals remembered for the session ----------------
+# Exact (tool, input) pairs you said yes to, for tools with remember-approval yes
+# (core/tools.metta). Kept here, not in &wm: a helper agent starts with an empty
+# working memory and would otherwise ask you about the same URL again.
+_APPROVED = set()
+
+
+def remember_approval(tool, tool_input):
+    _APPROVED.add((str(tool), str(tool_input).strip()))
+    return True
+
+
+_ALLOWED_TOOLS = set()     # "a" at the prompt: this tool, any input, for the session
+
+
+def approved_before(tool, tool_input):
+    return (str(tool) in _ALLOWED_TOOLS
+            or (str(tool), str(tool_input).strip()) in _APPROVED)
+
+
+def forget_approvals():
+    _APPROVED.clear()
+    _ALLOWED_TOOLS.clear()
+    return True
+
+
+def confirm_remembered(question, tool, tool_input):
+    """confirm() for tools with remember-approval yes, which also offer "a":
+    y = this exact call (and the same call again later), a = every call of
+    this tool for the rest of the session, anything else = no."""
+    try:
+        answer = input(f"{question} [y/N/a = allow {tool} for this session] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        _log(f"{question} [y/N/a]", "(no answer: input closed) -> no")
+        return False
+    _log(f"{question} [y/N/a]", answer)
+    if answer in ("a", "all", "always"):
+        _ALLOWED_TOOLS.add(str(tool))
+        return True
+    if answer in ("y", "yes"):
+        remember_approval(tool, tool_input)
+        return True
+    return False
+
+
 def read_goal():
     """Next goal from the user; EOF counts as quit."""
     try:

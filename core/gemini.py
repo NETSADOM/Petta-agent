@@ -30,6 +30,7 @@ ERROR_KINDS = {
     "model-not-found": "permanent",
     "blocked": "permanent",     # safety filter / empty answer
     "rate-limit": "temporary",
+    "quota": "permanent",       # rate limit with a long wait (e.g. tokens per DAY): retrying is useless
     "server": "temporary",
     "network": "temporary",
 }

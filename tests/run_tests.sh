@@ -27,6 +27,7 @@ run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_agent.metta < data/test_
 # tool gates: "y" approves the single approval request
 run sh -c 'echo y | env -u GEMINI_API_KEY sh ./run.sh tests/test_tools.metta'
 run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_skills.metta < /dev/null'
+run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_skill_folders.metta < /dev/null'
 run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_memory.metta < /dev/null'
 run sh -c 'env -u GEMINI_API_KEY sh ./run.sh tests/test_memory_reload.metta < /dev/null'
 run sh -c 'echo y | env -u GEMINI_API_KEY sh ./run.sh tests/test_recovery.metta'

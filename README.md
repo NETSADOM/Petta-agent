@@ -361,17 +361,54 @@ Config atoms (change with `(set-config KEY VALUE)`): `max-iterations 40`,
 !(set-skill-info research on-error "rephrase the query once, then report failure")
 ```
 
-Discovery is done by PeTTa:
-1. `(relevant-skills GOAL)` — skills whose keywords occur in the goal, best
-   score first, **only if every tool they need is declared**.
-2. Those skills' full guides go into the plan prompt; Gemini tags tasks
-   `(task t1 "..." (uses research))`. `check-plan` rejects unknown or
-   unavailable skills.
-3. While a task is current, its skill guide goes into every act prompt.
+Long skills are folders, loaded with `!(load-skills "skills")` (done in
+`my_capabilities.metta`):
+
+```
+skills/code-review/
+    SKILL.md        frontmatter + a Markdown guide of any length
+    checklist.md    extra file, read only when needed
+```
+
+```markdown
+---
+name: code-review                       # = the folder name, lowercase-with-dashes
+description: review source code for bugs, risks and readability
+tools: list-files, read-file, run-python
+keywords: review audit quality          # optional
+---
+# Code review
+1. ...
+```
+
+A folder skill becomes the same atoms as a MeTTa one (its body is the
+`guide` info), so the same rules apply: unavailable if a tool is missing,
+duplicates refused. A bad `SKILL.md` (no description, bad name, over 60 000
+characters) is reported as `(error (bad-skill-folder "dir" "why"))` and not loaded.
+
+How skills reach the model (progressive disclosure: the prompt stays small):
+
+| Prompt | Shows |
+|---|---|
+| plan | **every** available skill (name + description), and the best matches as **summaries** (`skill-plan-chars` 600, top `skill-max-recommended` 4) |
+| act | the current task's skills **in full** (`skill-guide-chars` 6000), the list of all skills, and each skill's extra files |
+| `read-skill NAME/FILE` | one extra file, on demand |
+
+Selection:
+1. `(relevant-skills GOAL)`: PeTTa scores each available skill by the goal
+   words that hit its keywords, its name or the content words of its
+   description, lightly stemmed (`calculating` ~ `calculate`, `files` ~ `file`).
+   Keywords are optional.
+2. The planner may tag a task with **any** available skill, not only the
+   recommended ones: `(task t1 "..." (uses code-review))`. Unknown or
+   unavailable skills are ignored when the plan is loaded.
+3. While acting, the model can load a skill the planner missed:
+   `(action read-skill "code-review")` attaches it to the current task, so its
+   full guide (and its verifiers) apply from then on.
 
 Skill guides are developer text, so they sit outside the untrusted `<data>`
-fences. Keyword matching is simple whole-word matching — synonyms won't hit,
-so list several keywords.
+fences. Files read with `read-skill NAME/FILE` come back as a tool result
+(inside `<data>`) and cannot leave the skill's folder.
 
 ## Memory (`core/memory.metta`)
 
