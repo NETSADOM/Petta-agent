@@ -97,7 +97,7 @@
        ())))
 
 !(set-config max-replans 2)
-; max-iterations (turns per goal, default 40) is set in context.metta: the prompt shows it
+; max-iterations (turns per goal, default 80) is set in context.metta: the prompt shows it
 !(set-config max-invalid 3)          ; bad replies IN A ROW before giving up
 !(set-config max-llm-errors 3)       ; temporary API errors IN A ROW before giving up
 !(set-config max-refusals 3)         ; repeated failing calls refused, then stop

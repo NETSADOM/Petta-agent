@@ -242,10 +242,12 @@ SHELL_CASES = {
     "date -s now": False, "date 01010000": False, "uniq a b": False, "hostname evil": False,
     "find . -delete": False, "cat a > b": False, "python3 x.py": False, "rm -rf x": False,
     "echo $(rm x)": False, "curl http://x": False,
+    "ls a#b; rm -rf x": False, "echo hi#\nrm x": False,
+    # git always asks: repository config can run programs (core.fsmonitor ...)
+    "git branch": False, "git branch -a": False, "git tag -l": False, "git remote -v": False,
+    "git -C sub status": False, "git log --oneline -5": False, "git show HEAD:file": False,
     # plain reading: runs without asking
-    "git branch": True, "git branch -a": True, "git branch --list fe*": True,
-    "git tag -l": True, "git remote -v": True, "git -C sub status": True,
-    "git log --oneline -5": True, "git show HEAD:file": True, "sort -k2 -t, in": True,
+    "sort -k2 -t, in": True, "echo hi # note": True,
     "tree -L 2": True, "file a.txt": True, "rg -n foo": True, "date +%Y": True,
     "uniq a": True, "hostname": True, "find . -name x": True, "ls -la | grep x": True,
 }

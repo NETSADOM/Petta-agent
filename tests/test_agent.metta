@@ -76,7 +76,7 @@
               "(action upper \"d\")" "(action upper \"e\")"))
 !(test (run-agent "x") (stopped (iteration-limit (progress (turns 3) (steps 3) (tasks-done 0 of 1) (open (t1))))))
 !(test (step-count) 3)
-!(set-config max-iterations 40)
+!(set-config max-iterations 80)
 
 ; ===== 5. "final" with open tasks is rejected; after max-structural-rejections (5) → done-unverified =====
 !(use-script ("(plan (task t1 \"a\") (task t2 \"b\"))"

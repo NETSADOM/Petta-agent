@@ -34,14 +34,14 @@ often tries to finish early, and it is told to close done tasks and go on.
 `blocker` note; an answer that fills the value in anyway is rejected, and the
 goal ends `blocked`, saying what is needed.
 
-**Long tasks.** 40 turns. The `note` tool keeps findings, files, decisions,
+**Long tasks.** 80 turns. The `note` tool keeps findings, files, decisions,
 todos and blockers for the whole run (15 notes, 250 characters each). Error
 limits count failures in a row; an identical failing call is refused, and a
 result identical to an earlier one is flagged as going in circles.
 
 **Safety.** Approval for side effects. `run-shell` runs read-only commands at
-once — checked by command **and option** (`git diff --output=f`,
-`git branch --delete=x`, `sort -o f` all ask) — and kills a command after 60 s.
+once — checked by command **and option** (`sort -o f` asks; every `git` command
+asks, since repo config can run programs) — and kills a command after 60 s.
 No terminal means no. File tools stay in the workspace; `http-get` refuses
 private addresses and binary files. Every memory write (facts, episodes,
 recovery fixes) passes the same sensitivity, size and pruning gates.

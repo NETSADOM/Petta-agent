@@ -54,7 +54,7 @@
 ; (step 1, now in short form) and the turn counter
 !(test (py-call (operator.contains (last-prompt) "collect the codes and report the first one")) True)
 !(test (py-call (operator.contains (last-prompt) "CODE-4711")) True)
-!(test (py-call (operator.contains (last-prompt) "PROGRESS: turn 27 of 40")) True)
+!(test (py-call (operator.contains (last-prompt) "PROGRESS: turn 27 of 80")) True)
 !(test (py-call (operator.contains (last-prompt) "(t1 \"collect the codes\" completed)")) True)
 
 ; near the limit, the model is told to wrap up

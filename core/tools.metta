@@ -32,7 +32,7 @@
 (default-tool-option timeout 30)
 (default-tool-option max-length 2000)
 (default-tool-option max-output 4000)
-(default-tool-option max-calls 40)     ; runaway guard; long tasks (40 turns) must fit
+(default-tool-option max-calls 80)     ; runaway guard; long tasks (80 turns) must fit
 (default-tool-option allow-empty no)     ; yes for tools that need no input (list-files, now)
 (default-tool-option retry yes)
 (default-tool-option retries default)   ; how many retries; default = config max-retries

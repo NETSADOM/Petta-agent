@@ -447,10 +447,12 @@ def _shell_env():
 # is a known read-only program used in a read-only way. Anything else — rm, mv,
 # cp, chmod, git push/reset, sed -i, curl, a script, a redirect (>), $(...) —
 # is treated as possibly destructive and needs your y/N first.
-# Command names are not enough: OPTIONS can write too (git diff --output=FILE,
-# git branch --delete=NAME, sort -o FILE, tree -o FILE, file -C, rg --pre CMD).
-# Every option is therefore checked against the rules below, and anything not
-# known to be harmless means "ask".
+# Command names are not enough: OPTIONS can write too (sort -o FILE, tree -o
+# FILE, file -C, rg --pre CMD). Every option is therefore checked against the
+# rules below, and anything not known to be harmless means "ask".
+# git always asks: a repository's config (core.fsmonitor, diff drivers, ...)
+# runs programs on plain `git status`, and the agent can create one with
+# write-file (a .git folder, or a bare repo planted in the workspace itself).
 
 # Programs with NO option or operand that writes, deletes or runs another program.
 _PLAIN_READ = set("""ls cat head tail wc grep egrep fgrep pwd whoami id uname which type stat du
@@ -468,23 +470,6 @@ _DENY = {
 }
 _FIND_WRITES = ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls")
 
-# git: a read-only subcommand, and for each the options that write or run programs
-_GIT_DENY = ("--output", "--ext-diff", "--textconv", "--open-files-in-pager", "-O", "--exec")
-_GIT_READ = {"status", "log", "diff", "show", "ls-files", "rev-parse", "blame", "shortlog",
-             "describe", "grep"}
-# these three only LIST with exactly these options (anything else creates/deletes)
-_GIT_LIST_ONLY = {
-    "branch": {"-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list",
-               "--show-current", "--merged", "--no-merged", "--contains", "--no-contains",
-               "--points-at", "--sort", "--format", "--color", "--no-color", "--no-column"},
-    "tag":    {"-l", "--list", "-n", "--contains", "--no-contains", "--merged", "--no-merged",
-               "--points-at", "--sort", "--format", "--color", "--no-color"},
-    "remote": {"-v", "--verbose"},
-}
-_GIT_LIST_OPERAND = {"--list", "-l", "--contains", "--no-contains", "--merged", "--no-merged",
-                     "--points-at"}                 # options after which a name is a pattern/commit
-_GIT_GLOBAL_OK = {"--no-pager", "-P"}              # NOT -c (sets config: can run a program)
-
 # GNU programs accept abbreviated long options. Only exact, reviewed names
 # may bypass approval; checking prefixes of dangerous names misses --out etc.
 _READ_LONG_OPTIONS = {
@@ -495,12 +480,6 @@ _READ_LONG_OPTIONS = {
     "rg": {"--line-number", "--ignore-case", "--fixed-strings", "--files", "--hidden",
            "--glob", "--type", "--count", "--files-with-matches", "--no-heading", "--color"},
     "date": {"--utc", "--universal", "--iso-8601", "--rfc-3339", "--date"},
-    "git": {"--no-pager", "--oneline", "--stat", "--shortstat", "--name-only", "--name-status",
-            "--short", "--porcelain", "--format", "--pretty", "--max-count", "--since", "--until",
-            "--author", "--all", "--no-ext-diff", "--no-textconv", "--no-color",
-            "--cached", "--staged", "--no-index", "--abbrev-ref", "--show-toplevel",
-            "--show-current", "--list", "--remotes", "--verbose", "--merged", "--no-merged",
-            "--contains", "--no-contains", "--points-at", "--sort", "--color", "--no-column"},
 }
 
 
@@ -537,30 +516,6 @@ def _denied(opts, letters, longs):
     return False
 
 
-def _git_is_read_only(args):
-    # global options before the subcommand: only harmless ones (-C DIR changes folder)
-    i = 0
-    while i < len(args) and args[i].startswith("-"):
-        if args[i] == "-C" and i + 1 < len(args):
-            i += 2
-        elif args[i] in _GIT_GLOBAL_OK:
-            i += 1
-        else:
-            return False                               # -c, --exec-path=, --git-dir=, ...
-    if i >= len(args):
-        return False
-    sub, opts, operands = args[i], *_split_options(args[i + 1:])
-    if sub in _GIT_READ:
-        return not any(o.startswith(_GIT_DENY) for o in opts)
-    if sub in _GIT_LIST_ONLY:
-        allowed = _GIT_LIST_ONLY[sub]
-        if any(o.split("=", 1)[0] not in allowed for o in opts):
-            return False                               # -d, --delete=x, -m, -f, --set-upstream-to ...
-        # a name is only a pattern/commit after a listing option; otherwise it creates one
-        return not operands or any(o.split("=", 1)[0] in _GIT_LIST_OPERAND for o in opts)
-    return False
-
-
 def _segment_is_read_only(words):
     if not words:
         return True
@@ -587,9 +542,7 @@ def _segment_is_read_only(words):
         return not any(a.startswith(_FIND_WRITES) for a in args)
     if cmd in ("python3", "python", "node"):
         return args in (["--version"], ["-V"])
-    if cmd == "git":
-        return _git_is_read_only(args)
-    return False                                       # unknown program: ask
+    return False                                       # unknown program (and git): ask
 
 
 def shell_is_read_only(command):
@@ -601,6 +554,9 @@ def shell_is_read_only(command):
     try:
         lex = shlex.shlex(text.replace("\n", " ; "), posix=True, punctuation_chars=True)
         lex.whitespace_split = True
+        # shlex drops everything after a '#' even mid-word; sh does not ("ls a#b; rm x"
+        # runs rm). With no comment chars every word is checked: sh runs no more than that.
+        lex.commenters = ""
         tokens = list(lex)
     except ValueError:                                 # unbalanced quotes
         return False
@@ -621,12 +577,16 @@ def write_is_new_file(spec):
     """True when write-file would only CREATE a new file inside the workspace.
     Overwriting an existing file needs your approval. Input write_file would
     refuse anyway (bad JSON, a path outside the workspace) writes nothing, so it
-    is passed on unasked and the tool reports the problem to the agent."""
+    is passed on unasked and the tool reports the problem to the agent.
+    Anything inside a .git folder asks too: hooks and config run programs."""
     try:
         data = json.loads(str(spec), strict=False)   # a model may put raw newlines in "content"
         path = _inside(data["path"])
     except Exception:
         return True
+    rel = os.path.relpath(path, os.path.realpath(workspace()))
+    if ".git" in (part.lower() for part in re.split(r"[\\/]", rel)):
+        return False
     return not os.path.exists(path)
 
 

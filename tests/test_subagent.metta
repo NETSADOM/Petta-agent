@@ -28,7 +28,7 @@
 !(test (current-turn) 4)
 ; settings are back to the main agent's
 !(test (config-value agent-depth) 0)
-!(test (config-value max-iterations) 40)
+!(test (config-value max-iterations) 80)
 ; the helper's 3 turns count toward the parent's turn limit
 !(test (config-value helper-turns-used) 3)
 !(test (turns-used (current-turn)) 7)
@@ -72,7 +72,7 @@
 !(test (car-atom (index-atom (run-agent "budget") 1)) iteration-limit)
 !(test (config-value helper-turns-used) 2)
 !(test (config-value max-iterations) 3)
-!(set-config max-iterations 40)
+!(set-config max-iterations 80)
 
 ; ---------------- a helper is not offered delegate (it cannot use it) ----------------
 (= (offers $tool) (not (== (collapse (let $all (prompt-tool-catalog)

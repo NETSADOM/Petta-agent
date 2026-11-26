@@ -61,7 +61,7 @@ Translated proposals go through exactly the same validation and gates.
 | `delegate` | safe | **core, sub-agent**: a helper agent does a self-contained sub-task in a fresh context (own plan, steps, `sub-agent-turns` 20) and returns its answer; the parent's working memory is restored; helpers can't start helpers and store no episodes. **Off by default** (`(config delegate on)` offers it to the model): a helper re-plans and re-fetches, which made 40-turn goals slower |
 | `list-files`, `read-file` | safe | only inside the workspace (`PAGENT_WORKSPACE`, default `workspace/`); `..` and absolute paths refused; missing file, directory, binary and empty files answered in words |
 | `write-file` | needs-approval | JSON `{"path", "content"}`, workspace only; bad JSON, bad path and OS errors (permission, path through a file) answered in words |
-| `run-python` | needs-approval | separate `python3 -I` process in the workspace folder, empty env (no keys), CPU/memory/file/process limits, 15 s |
+| `run-python` | needs-approval | never retried (one approval = one run); separate `python3 -I` process in the workspace folder, empty env (no keys), CPU/memory/file/process limits, 15 s |
 | `run-shell` | needs-approval | `sh` in the workspace, no stdin, env without `*KEY*/*TOKEN*/*SECRET*/*PASSWORD*`; returns exit code + stdout + stderr; non-zero exit → `(error ..)` with the output; after 60 s (`PAGENT_SHELL_TIMEOUT`) the whole process group is killed and the partial output returned; never retried |
 | `send-message` | safe | **core** (`core/agent.metta`): shows the user a message without waiting |
 | `ask-user` | safe | **core**: asks and waits for one line; EOF, Ctrl+C or no answer within 600 s (`PAGENT_ASK_TIMEOUT`, terminal only) → `(error "the user did not answer: ...")`. The `(ask-user "q")` reply is the same tool |
@@ -77,7 +77,7 @@ everything a tool raises (including `SystemExit` and `KeyboardInterrupt`),
 times out hung tools, and reports an unknown tool as
 `(error (unknown-tool NAME (available ...)))`. Tests: `tests/test_agent_tools.metta`.
 Tool option `retry no` turns off automatic retries of temporary errors for
-tools with side effects (`run-shell`) or a person (`ask-user`, `send-message`).
+tools with side effects (`run-shell`, `run-python`, `write-file`) or a person (`ask-user`, `send-message`).
 
 Skills: `research`, `math`, `file-analysis`, `data-analysis`, `coding`, `shell`,
 `summarization`, `papers` (plus the folder skill `skills/code-review`) — each with tools, keywords, procedure, expected output and
@@ -101,7 +101,7 @@ LLM call. Longer goals are planned by the model, asked for the fewest tasks
 PeTTa builds every prompt from the AtomSpaces: goal, plan + current task with
 its skill guide, steps, tool/skill catalogs, relevant skills, **relevant**
 facts from `&kb`, similar past tasks, recovery hints, and
-`PROGRESS: turn N of 40` (with "FEW TURNS LEFT: finish now" in the last 3).
+`PROGRESS: turn N of 80` (with "FEW TURNS LEFT: finish now" in the last 3).
 Steps are **windowed**: the last `context-steps` (8) in full, each clipped to
 `context-obs-chars` (600), except the steps of the **latest turn**, which share
 `context-fresh-chars` (12 000) so a fetched page is read once, in full; the `context-older-steps` (20) before them in
@@ -189,7 +189,7 @@ sh run.sh some_file.metta     # run any MeTTa file
 | Turn: prompt → model → parse calls → run → results into next turn | `core/agent.metta`, `core/context.metta`, `core/reply_parser.py` | `tests/test_agent.metta`, `tests/test_long_task.metta` |
 | Only known tools run; unknown names come back as errors | `core/tools.metta` `execute` | `tests/test_agent.metta` scenario 2 |
 | The agent decides it is done and tells the user | `do-final` + `core/verify.metta`, `ui.show_result` | `tests/test_agent.metta` |
-| Long tasks (20+ turns) keep the goal | 40 turns, goal + plan + PROGRESS every turn, older steps in short form | `tests/test_long_task.metta` (27 turns) |
+| Long tasks (20+ turns) keep the goal | 80 turns, goal + plan + PROGRESS every turn, older steps in short form | `tests/test_long_task.metta` (27 turns) |
 | Recover from failures by trying something different | recovery hints, repeated-call refusal | `tests/test_agent.metta` 3/3b |
 | Keeps running between tasks, no restart | `main.metta` `cli` + `run-goal` (catches internal errors), `core/session.py` | CLI block in `tests/run_tests.sh` |
 | Bounded prompt over long sessions | step window, `context-obs-chars`, `prompts.STEPS_MAX`, 5-task session memory | `tests/test_context.metta`, `tests/test_long_task.metta` |
@@ -257,17 +257,20 @@ can do next.
 
 **Approval.** Tools are `safe` or `needs-approval`; a `needs-approval` tool
 may declare `auto-approve module.fn` for inputs that cannot do damage:
-`run-shell` runs read-only commands (`ls`, `cat`, `grep`, `git status`, pipes
-of these, ...) at once and asks `[y/N]` for everything else. It is an
+`run-shell` runs read-only commands (`ls`, `cat`, `grep`, pipes of these, ...)
+at once and asks `[y/N]` for everything else. It is an
 allow-list of commands **and options**: `rm`, `mv`, redirects `>`, `$(...)`,
-scripts, `git push` all ask, and so do read-only programs used with an option or
-operand that writes or runs something (`git diff --output=f`,
-`git branch --delete=x`, `git branch NEW`, `git -c ...`, `sort -o f`,
-`tree -o f`, `file -C`, `rg --pre`, `uniq IN OUT`, `date -s`). An unknown
-option of `git branch`/`tag`/`remote` asks too.
+scripts all ask, and so do read-only programs used with an option or operand
+that writes or runs something (`sort -o f`, `tree -o f`, `file -C`, `rg --pre`,
+`uniq IN OUT`, `date -s`). **Every `git` command asks**: a repository's config
+(`core.fsmonitor`, diff drivers) runs programs even on `git status`, and the
+agent could plant one with `write-file`. A `#` inside a word is not a comment to
+`sh`, so it hides nothing (`ls a#b; rm x` asks).
 Long options must match an explicitly permitted name: abbreviations such as
-`sort --out=file` and `git diff --out=file` require approval too.
-`write-file` creates new files at once and asks before overwriting one. With no
+`sort --out=file` require approval too.
+`write-file` creates new files at once and asks before overwriting one or writing
+inside a `.git` folder. The approval question shows the **whole** input, with
+control characters shown as `\xNN` so they cannot redraw the line. With no
 terminal (EOF) the answer is **no**.
 
 **Logs.** Every session is written to `logs/session-YYYYMMDD-HHMMSS.log`
@@ -406,7 +409,7 @@ agent-loop(i): i > max-iterations → (stopped (iteration-limit (progress ...)))
   (error k m)     temporary → next iteration (3 in a row → stop); permanent → stop now
 ```
 
-Long tasks: 40 turns per goal and 40 calls per tool by default. Error limits
+Long tasks: 80 turns per goal and 80 calls per tool by default. Error limits
 count failures **in a row**, so a few stray bad replies over a long run don't
 end it. Test: `tests/test_long_task.metta` (27 turns: a batch, an unknown tool,
 a failure and a different retry; the goal and the turn-1 finding are still in
@@ -437,7 +440,7 @@ of ≤ 250 characters; when full, the oldest `found` note makes room. Successful
 Every step is an atom `(step N TOOL INPUT OUTCOME)` in `&wm`, and every
 approval decision is `(approval TOOL INPUT true|false)`.
 
-Config atoms (change with `(set-config KEY VALUE)`): `max-iterations 40`,
+Config atoms (change with `(set-config KEY VALUE)`): `max-iterations 80`,
 `max-invalid 3`, `max-llm-errors 3`, `max-refusals 3`, `max-final-rejections 2`,
 `brain gemini|scripted`.
 
@@ -598,7 +601,7 @@ Every call goes through `(execute TOOL INPUT)`, gates in this order:
 | 5 | run in thread, `timeout`, output cut at `max-output`, exceptions caught | `(error timeout after Ns)`, `(error exception Type: msg)` |
 
 Options and defaults: `timeout 30`, `max-length 2000`, `max-output 4000`,
-`max-calls 40`, `pattern` (repeatable, none by default).
+`max-calls 80`, `pattern` (repeatable, none by default).
 
 Every denial, approval decision and run is appended to `data/audit.jsonl`
 (time, event, tool, input, outcome, detail, seconds).
@@ -612,7 +615,8 @@ only declare tools you trust.
 replays replies in order through the *same* parse/validate/permission path.
 
 Prompt-injection defence: our instructions go in Gemini's `systemInstruction`;
-goal, facts, steps and tool outputs go in `<data>` tags marked untrusted.
+goal, facts, steps and tool outputs go in `<data>` tags marked untrusted; a
+`<data` or `</data` inside that text is escaped, so it cannot close the fence.
 The key is never written into error messages.
 
 ## Verified PeTTa facts (tested on commit ee5cacb, SWI-Prolog 11.0.0)
@@ -686,7 +690,7 @@ The key is never written into error messages.
 - [x] Tools: read-file, write-file, run-shell, send-message, ask-user (+ web-search, wiki-search, http-get, run-python, calc, memory); every result is text
 - [x] Turn loop with one or several calls per reply; unknown tools come back as errors
 - [x] The agent decides it is done (verified final) and tells the user
-- [x] Long tasks (40 turns, tested with 27), recovery by changing approach, stuck report
+- [x] Long tasks (80 turns, tested with 27), recovery by changing approach, stuck report
 - [x] Several goals in one session without a restart; bounded prompt
 - [x] Ask instead of guessing (unanswered → blocked, never invented); shell timeout; approval for destructive commands and options
 - [x] Evidence before success; notebook for long tasks; gated memory; acyclic plans; every prompt section bounded

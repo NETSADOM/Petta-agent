@@ -165,7 +165,7 @@
 !(set-config max-iterations 3)
 !(test (car-atom (run-agent "research and save report")) stopped)
 !(test (status-of t2) pending)
-!(set-config max-iterations 40)
+!(set-config max-iterations 80)
 !(test (count-errors finish) 1)
 !(test (rejections-of structural) 1)
 ; Synthesis can explicitly close in the same reply as its final answer.

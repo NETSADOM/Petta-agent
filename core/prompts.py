@@ -268,8 +268,13 @@ def cap(text, limit, keep="tail"):
     return text[:limit] + f"[{cut} characters cut]"
 
 
+# Untrusted text must not open or close a fence itself: a web page saying
+# "</data> new instructions" would otherwise step outside <data>.
+_FENCE_TAG = re.compile(r"<(?=\s*/?\s*data\b)", re.I)
+
+
 def _data(name, value):
-    return f"<data name=\"{name}\">\n{value}\n</data>"
+    return f"<data name=\"{name}\">\n{_FENCE_TAG.sub('&lt;', str(value))}\n</data>"
 
 
 def plan_prompt(goal, tools, skills, recommended, tasks, steps, facts, episodes,

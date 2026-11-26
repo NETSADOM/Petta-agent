@@ -46,6 +46,10 @@
 !(test (repr (py-call (agent_tools.http_get "http://localhost/admin"))) "(error localhost is a private/local address — refused)")
 !(test (repr (py-call (agent_tools.http_get "file:///etc/passwd"))) "(error only http(s) URLs are allowed)")
 !(test (car-atom (index-atom (execute http-get "ftp://x") 1)) invalid-input)   ; gate pattern
+; the catalog's example is a placeholder: copied as is, it is refused BEFORE any approval
+; (a real sample URL, Lake_Tana, got copied and fetched for a question about dropout)
+!(test (car-atom (index-atom (execute http-get (tool-option http-get example)) 1)) invalid-input)
+!(test (collapse (match &wm (approval http-get $i $y) $i)) ())
 ; a redirect to a private address is refused too
 !(test (case (catch (py-call (fake_tools.redirect_check "http://192.168.1.1/")))
              (((Error $a $b) refused) ($x allowed)))

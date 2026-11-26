@@ -323,9 +323,18 @@ def quit_now(_=None):
     os._exit(0)
 
 
+# Control characters (ESC, CR, backspace, ...) and bidi overrides could redraw
+# the line and make an input look harmless. \n and \t stay: code is multi-line.
+_UNSAFE_CHARS = __import__("re").compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩]")
+
+
 def approval_question(tool, tool_input):
-    return (yellow("  ? ") + bold(f"allow {tool}") +
-            f" with input {fmt(tool_input, 200)!s} ?")
+    """The FULL input: a cut one could hide `; rm -rf ~` after a harmless start."""
+    shown = _UNSAFE_CHARS.sub(lambda m: f"\\x{ord(m.group()):02x}", fmt(tool_input, float("inf")))
+    if "\n" in shown:
+        shown = "\n    | " + shown.replace("\n", "\n    | ") + "\n   "
+    return (yellow("  ? ") + bold(f"allow {tool}") + f" with input {shown} ?")
 
 
 def question_text(question):

@@ -18,6 +18,7 @@ Free tiers often limit TOKENS PER MINUTE (Groq: 8000), which a multi-turn agent
 hits after a few calls. The 429 reply says how long to wait; generate() waits
 exactly that (plus a little) and tries again, up to 4 times, instead of failing.
 """
+import http.client
 import json
 import os
 import re
@@ -28,7 +29,8 @@ import urllib.request
 DEFAULT_BASE = "https://api.openai.com/v1"
 
 def base_url():
-    return os.environ.get("OPENAI_BASE_URL", DEFAULT_BASE).rstrip("/")
+    # strip(): a .env saved with Windows line endings leaves a "\r" on the value
+    return os.environ.get("OPENAI_BASE_URL", DEFAULT_BASE).strip().rstrip("/") or DEFAULT_BASE
 
 
 def models():
@@ -328,6 +330,10 @@ def _generate_once(system, prompt):
         return out
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         return ["error", "network", _short(str(e))]
+    except http.client.InvalidURL as e:          # e.g. a control character in OPENAI_BASE_URL
+        return ["error", "config", f"OPENAI_BASE_URL is not a valid URL: {_short(str(e))}"]
+    except http.client.HTTPException as e:       # IncompleteRead, a broken status line, ...
+        return ["error", "network", f"{type(e).__name__}: {_short(str(e))}"]
     except ValueError:
         return ["error", "server", "reply was not JSON"]
 

@@ -27,7 +27,7 @@
 !(set-config context-verify-total 38000) ; shared between the steps (prompts.py caps the total at 40000)
 !(set-config context-older-steps 20) ; the older steps kept in short form (only these)
 !(set-config context-older-chars 120); max characters per short outcome
-!(set-config max-iterations 40)     ; turns (LLM calls) per goal; shown as PROGRESS, enforced by agent.metta
+!(set-config max-iterations 80)     ; turns (LLM calls) per goal; shown as PROGRESS, enforced by agent.metta
 
 (= (skills-of-task $id) (collapse (match &wm (task-skill $id $s) $s)))
 

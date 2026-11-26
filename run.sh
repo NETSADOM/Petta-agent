@@ -8,9 +8,11 @@
 # it (the test suite does, so tests never call a real model by accident).
 DOTENV="$(dirname "$0")/.env"
 if [ -f "$DOTENV" ] && [ -z "$PAGENT_NO_DOTENV" ]; then
+    CR=$(printf '\r')
     while IFS='=' read -r key value || [ -n "$key" ]; do
         case "$key" in ''|\#*) continue ;; esac
         case "$key" in *[!A-Za-z0-9_]*) continue ;; esac     # only plain NAME=value lines
+        value=${value%"$CR"}                                  # .env saved with Windows (CRLF) line endings
         value=${value%"${value##*[! ]}"}; value=${value%\"}; value=${value#\"}; value=${value%\'}; value=${value#\'}
         eval "current=\${$key:-}"
         [ -z "$current" ] && export "$key=$value"

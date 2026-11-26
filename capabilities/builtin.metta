@@ -10,8 +10,8 @@
 !(set-tool-option calc pattern "[0-9+*/().%^, eE-]+")
 !(set-tool-option calc max-length 300)
 
-!(declare-tool wiki-search "search Wikipedia for ENCYCLOPEDIC facts (people, places, history, science, definitions); input is a short query like 'Lake Tana area'. Returns the best article's summary." safe agent_tools.wiki_search)
-!(set-tool-option wiki-search example "Lake Tana")
+!(declare-tool wiki-search "search Wikipedia for ENCYCLOPEDIC facts (people, places, history, science, definitions); input is a short query: the topic or article title from YOUR goal. Returns the best article's summary." safe agent_tools.wiki_search)
+!(set-tool-option wiki-search example "TOPIC FROM THE GOAL")   ; a placeholder: a real topic got copied
 !(set-tool-option wiki-search max-length 200)
 !(set-tool-option wiki-search timeout 25)
 !(set-tool-option wiki-search retries 1)
@@ -33,6 +33,7 @@
 !(declare-tool write-file "write a text file in the workspace: path and content as TWO strings (shown below; \\n for a new line). JSON {\"path\": ..., \"content\": ...} also works." needs-approval agent_tools.write_file)
 !(set-tool-option write-file example "(action write-file \"notes/out.txt\" \"line 1\\nline 2\")")
 !(set-tool-option write-file max-length 100000)
+!(set-tool-option write-file retry no)        ; one approval = one write
 !(set-tool-option write-file auto-approve agent_tools.write_is_new_file)   ; asks only to OVERWRITE
 
 !(declare-tool run-python "run a short Python 3 program and return what it prints; use print(). Separate process, runs in the workspace folder (open files by their workspace path), 15s limit, no third-party packages." needs-approval agent_tools.run_python)
@@ -40,6 +41,7 @@
 !(set-tool-option run-python timeout 25)
 !(set-tool-option run-python max-length 20000)
 !(set-tool-option run-python max-output 8000)
+!(set-tool-option run-python retry no)        ; "timed out" looks temporary, but one approval = one run
 
 !(declare-tool run-shell "run a shell command (sh) in the workspace folder and return its exit code, stdout and stderr, e.g. ls -la or grep -n TODO notes.txt. Non-interactive (no stdin), 60s limit. Read-only commands run at once; anything that may change or delete something waits for the user's approval." needs-approval agent_tools.run_shell)
 !(set-tool-option run-shell example "grep -n TODO notes.txt")
@@ -49,8 +51,8 @@
 !(set-tool-option run-shell timeout 75)     ; > the 60s kill inside run_shell, so it reports first
 !(set-tool-option run-shell retry no)       ; a command with side effects must not run twice
 
-!(declare-tool http-get "GET a public http(s) URL; a web page comes back as its readable text. Binary files (PDF) are refused." needs-approval agent_tools.http_get)
-!(set-tool-option http-get example "https://en.wikipedia.org/wiki/Lake_Tana")
+!(declare-tool http-get "GET a public http(s) URL you found (a search result or a link in a page); a web page comes back as its readable text. Binary files (PDF) are refused." needs-approval agent_tools.http_get)
+!(set-tool-option http-get example "URL FROM YOUR SEARCH RESULTS")   ; not a URL: copied as is, the pattern refuses it before any approval
 !(set-tool-option http-get pattern "https?://\\S+")
 !(set-tool-option http-get timeout 20)
 !(set-tool-option http-get retries 1)         ; one retry: a dead site costs 40 s, not 80
