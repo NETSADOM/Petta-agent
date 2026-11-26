@@ -42,6 +42,8 @@ Ollama `http://localhost:11434/v1` (no key needed for local servers).
 `OPENAI_FALLBACK_MODELS` (comma-separated, e.g.
 `openai/gpt-oss-20b,qwen/qwen3.8-27b` on Groq) is used in order when the current
 model's daily quota runs out, so a long goal goes on instead of stopping.
+gpt-oss models get `reasoning_effort` medium (`PAGENT_REASONING_EFFORT`
+low|medium|high|off overrides it; see the end of [Status](#status)).
 Both providers return the same `(ok text)` / `(error KIND msg)`, so recovery,
 verification and the loop don't know which one is used.
 
@@ -174,7 +176,8 @@ No Python packages beyond the standard library.
 
 ```bash
 git clone https://github.com/NETSADOM/PeTTa-Agent.git && cd PeTTa-Agent
-echo 'GEMINI_API_KEY=...' > .env   # or OPENAI_API_KEY + OPENAI_MODEL (+ OPENAI_BASE_URL); .env is git-ignored
+echo 'GEMINI_API_KEY=...' > .env   # or OPENAI_API_KEY + OPENAI_MODEL (+ OPENAI_BASE_URL); .env is git-ignored,
+                                   # Windows (CRLF) or Unix line endings both work
 sh run.sh main.metta          # start the agent: type goals, one after another
 python3 web/server.py         # or the same agent in a browser: http://localhost:8765
 sh tests/run_tests.sh         # expect: ALL TESTS PASSED (no key needed)
@@ -206,6 +209,12 @@ Real model (Groq, `openai/gpt-oss-120b`, falling back to `gpt-oss-20b` and
 `qwen/qwen3.8-27b` when a daily quota ran out), recorded by
 `scripts/record_logs.sh` with the goals in `logs/goals.txt`. The driver plays
 the user and answers `y` at approval prompts; everything it typed is in the log.
+
+These logs were recorded before the 80-turn limit and medium reasoning effort.
+Re-run with the current code, the to-do goal took only 8 turns (several steps per
+turn), so goal 3 in `logs/goals.txt` is now a bigger 14-step task (a sales-analysis
+tool: code, tests, a command-line interface, a report, cross-checks) for the next
+recording, which replaces the logs below.
 
 | Task | Log | Outcome |
 |---|---|---|
@@ -303,7 +312,7 @@ terminal: colours, approvals, questions, `c` + Enter to cancel. The page has:
 - **backend events**: each line the agent appends to the audit log
   (`PAGENT_AUDIT`, default `data/audit.jsonl`): tool calls with their outcome
   and time, approvals and denials, verification checks, model switches, empty
-  replies. Click one for its full input and detail;
+  replies, rejected plans (with the plan's text). Click one for its full input and detail;
 - **Cancel goal** and **Restart** (a new session; memory was saved after every goal).
 
 One agent session is shared by every open tab. The server listens on
@@ -492,8 +501,9 @@ Selection:
    description, lightly stemmed (`calculating` ~ `calculate`, `files` ~ `file`).
    Keywords are optional.
 2. The planner may tag a task with **any** available skill, not only the
-   recommended ones: `(task t1 "..." (uses code-review))`. Unknown or
-   unavailable skills are ignored when the plan is loaded.
+   recommended ones: `(task t1 "..." (uses code-review))`, or several:
+   `(uses coding shell)`. Unknown or unavailable skills are ignored when the
+   plan is loaded (the task and its other skills stay).
 3. While acting, the model can load a skill the planner missed:
    `(action read-skill "code-review")` attaches it to the current task, so its
    full guide (and its verifiers) apply from then on.
@@ -573,7 +583,8 @@ Each layer's result is stored: `(verification ROUND LAYER RESULT)`.
 ## Task manager
 
 Plan format: `(task ID "desc" OPTIONS...)`, options `(after ID ...)` and
-`(uses SKILL)` in any order. `(next-task)` = first ready task;
+`(uses SKILL ...)` in any order. A rejected plan is written to the audit log
+with its text and the reason (`plan-rejected`). `(next-task)` = first ready task;
 `(current-task)` = the running task, else the next one; acting marks it
 `running`. `(fail-task ID)` blocks dependents down the whole chain.
 Execution is sequential; `(ready-tasks)` already lists everything that could
@@ -695,7 +706,7 @@ The key is never written into error messages.
 - [x] Ask instead of guessing (unanswered → blocked, never invented); shell timeout; approval for destructive commands and options
 - [x] Evidence before success; notebook for long tasks; gated memory; acyclic plans; every prompt section bounded
 - [x] Extra: sub-agents (`delegate`), web search
-- [x] 670+ offline checks (`sh tests/run_tests.sh`), offline evaluation 45/50 (100 % on every safety category)
+- [x] 780 offline checks (`sh tests/run_tests.sh`), offline evaluation 45/50 (100 % on every safety category)
 - [x] Live model check (`tests/test_llm_live.metta`) with `gemini-3.8-flash`
 - [x] Logs of 3 real tasks, one of 40 turns: see [Logs of completed tasks](#logs-of-completed-tasks) (a full session needs about 100 model calls; free tiers run out, hence `OPENAI_FALLBACK_MODELS`)
 - [ ] Live evaluation: `sh eval/run_eval.sh` with a key set
@@ -716,9 +727,13 @@ plan rejections (`max-structural-rejections`, 5) and content rejections
 (`max-final-rejections`, 2) have separate bounded retry counts.
 After a failed format-repair request, substantial plain prose can be converted
 to a final proposal only when semantic verification is enabled; it still passes
-all completion checks. An empty reply whose hidden reasoning named a step is
-repaired with medium reasoning effort for that one call; empty replies still use
-bounded retries and can stop a run. Groq's `output_parse_failed` (400) is
+all completion checks. gpt-oss models run at **medium** reasoning effort
+(`PAGENT_REASONING_EFFORT` = low|medium|high|off): at low they often named the
+next step and stopped, so almost every turn needed a second call (Groq
+gpt-oss-120b: an empty reply on every turn at low, about 1 in 6 at medium). With
+low chosen, an empty reply whose hidden reasoning named a step is repaired with
+medium effort for that one call. Empty replies still use bounded retries and
+can stop a run. Groq's `output_parse_failed` (400) is
 recovered from `failed_generation` and repaired like any unusable reply.
 
 ### Known limitations (from the evaluation)

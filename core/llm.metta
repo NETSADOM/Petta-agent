@@ -175,7 +175,9 @@
    (if (is-expression $o)
        (if (== (car-atom $o) after)
            (> (size-atom $o) 1)
-           (if (== (car-atom $o) uses) (== (size-atom $o) 2) False))
+           ; one skill or several: (uses coding shell) is a fine task, and a model
+           ; writing it for a coding+shell goal lost the whole plan (bad-task)
+           (if (== (car-atom $o) uses) (> (size-atom $o) 1) False))
        False))
 
 ; dependency list of one task: () or (t1 t2 ...)
@@ -186,11 +188,13 @@
                        (let $ds (cdr-atom $o) (superpose $ds))   ; bind first: gotcha 2
                        (empty)))))
 
-; skills a task uses: () or (research)
+; skills a task uses: () or (research) or (coding shell)
 (= (task-uses $t)
    (collapse (let* (($opts (task-opts $t))
                     ($o (superpose $opts)))
-                   (if (== (car-atom $o) uses) (index-atom $o 1) (empty)))))
+                   (if (== (car-atom $o) uses)
+                       (let $ss (cdr-atom $o) (superpose $ss))   ; bind first: gotcha 2
+                       (empty)))))
 
 (= (task-shape-ok $t)
    (if (and (is-expression $t) (>= (size-atom $t) 3))
@@ -335,9 +339,12 @@
               (((ok $text)
                   (let $p (check-plan (parse-reply $text))
                        (if (== (car-atom $p) invalid)
-                           (if (< $attempt 2)
-                               (llm-plan-with (py-call (prompts.plan_retry $request $text (repr $p))) (+ $attempt 1))
-                               $p)
+                           ; the rejected plan text goes to the audit log: "bad-task" alone
+                           ; could not tell which task was wrong
+                           (let $l (py-call (toolrunner.audit_text plan-rejected planner $text invalid (repr $p)))
+                                (if (< $attempt 2)
+                                    (llm-plan-with (py-call (prompts.plan_retry $request $text (repr $p))) (+ $attempt 1))
+                                    $p))
                            (planned (load-plan $p)))))
                ($err $err)))))
 

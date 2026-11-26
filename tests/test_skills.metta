@@ -44,6 +44,11 @@
 !(load-plan (plan (task t1 "a" (uses dancing)) (task t2 "b" (uses shouting))))
 !(test (skills-of-task t1) ())
 !(test (skills-of-task t2) (shouting))
+; several skills in one (uses ..): a coding+shell task wrote (uses coding shell), and
+; rejecting it threw away a whole 6-step plan; every usable one is attached
+!(test (check-plan (plan (task t1 "a" (uses shouting retrying)))) (plan (task t1 "a" (uses shouting retrying))))
+!(load-plan (plan (task t1 "a" (uses shouting dancing retrying))))
+!(test (skills-of-task t1) (shouting retrying))
 !(test (check-plan (plan (task t1 "a" (uses)))) (invalid bad-task))
 !(test (check-plan (plan (task t1 "a" (colour red)))) (invalid bad-task))
 !(test (check-plan (plan (task t1 "a") (task t2 "b" (after t1 t3)))) (invalid unknown-dependency))

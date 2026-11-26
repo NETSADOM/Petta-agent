@@ -140,9 +140,13 @@ def _plan(tasks):
         if after:
             after = after if isinstance(after, list) else [after]
             opts += " (after " + " ".join(sym(a) for a in after) + ")"
-        uses = _get(t, "uses", "skill")
+        uses = _get(t, "uses", "skill", "skills")
         if uses:
-            opts += f" (uses {sym(uses)})"
+            # "uses": ["coding", "shell"] was squashed into one name, codingshell
+            uses = uses if isinstance(uses, list) else [uses]
+            names = [n for n in (sym(u) for u in uses) if n]
+            if names:
+                opts += " (uses " + " ".join(names) + ")"
         parts.append(f"(task {tid} {q(desc)}{opts})")
     return "(plan " + " ".join(parts) + ")" if parts else ""
 

@@ -266,14 +266,17 @@ def _audit_empty(name, reason, message, usage, prompt_chars):
 
 
 def reasoning_effort(name):
-    """gpt-oss spends its output on hidden reasoning first; with the default
-    effort it often runs out before writing any answer (an EMPTY reply, a lost
-    turn). Our replies are one short S-expression, so "low" is enough.
+    """gpt-oss spends its output on hidden reasoning first; with the provider's
+    default effort it often ran out before writing any answer (an EMPTY reply, a
+    lost turn). "low" went the other way: it named the step ("Use http-get.") and
+    stopped, so nearly every turn needed a second, medium-effort call. "medium"
+    answered on the first call (Groq gpt-oss-120b: empty replies from every turn
+    to about 1 in 6), so it is the default.
     PAGENT_REASONING_EFFORT overrides it (low|medium|high); "off" sends nothing.
     Only for gpt-oss: other models may reject the field."""
     if "gpt-oss" not in str(name).lower():
         return None
-    effort = os.environ.get("PAGENT_REASONING_EFFORT", "low").strip().lower()
+    effort = os.environ.get("PAGENT_REASONING_EFFORT", "medium").strip().lower()
     if effort in ("", "off", "none"):
         return None
     if ESCALATE["next"] and effort == "low":
@@ -285,6 +288,7 @@ def reasoning_effort(name):
 # the very next call (the format repair) runs with medium effort: at low effort
 # gpt-oss often stops right after naming the step, and asked again the same way
 # it does it again (three in a row ended a run). One call only, then back to low.
+# (Only when low is chosen with PAGENT_REASONING_EFFORT; the default is medium.)
 ESCALATE = {"next": False}
 
 

@@ -97,6 +97,13 @@ class RequirementsRegressions(unittest.TestCase):
             self.assertNotIn(bad, shown)
         self.assertIn("rm -rf ~", shown)
 
+    def test_json_plan_keeps_every_skill(self):
+        reply = '{"plan": [{"id": "t1", "task": "code it", "uses": ["coding", "shell"]}, ' \
+                '{"id": "t2", "task": "sum", "uses": "math", "after": ["t1"]}]}'
+        self.assertEqual(reply_parser.extract(reply),
+                         ["found", '(plan (task t1 "code it" (uses coding shell)) '
+                                   '(task t2 "sum" (after t1) (uses math)))'])
+
     def test_malformed_json_replies_never_raise(self):
         for value in ({"plan": [None]}, {"plan": [1]}, {"plan": [True]},
                       {"plan": [["nested"]]}, {"plan": [{"task": "ok"}, None]}):
@@ -121,17 +128,18 @@ class RequirementsRegressions(unittest.TestCase):
         self.assertEqual(result[0], "error")
         self.assertIn("blank response", result[1])
 
-    def test_gpt_oss_gets_low_reasoning_effort(self):
+    def test_gpt_oss_gets_medium_reasoning_effort(self):
+        # low named the step and stopped (an empty reply on almost every turn)
         import openai_compat
         with patch.dict("os.environ", {}, clear=False):
             import os
             os.environ.pop("PAGENT_REASONING_EFFORT", None)
             body = openai_compat.request_body("openai/gpt-oss-120b", "sys", "prompt")
-            self.assertEqual(body["reasoning_effort"], "low")
+            self.assertEqual(body["reasoning_effort"], "medium")
             # other models may reject the field: never sent to them
             self.assertNotIn("reasoning_effort", openai_compat.request_body("llama-3.3-70b", "s", "p"))
-            os.environ["PAGENT_REASONING_EFFORT"] = "medium"
-            self.assertEqual(openai_compat.request_body("gpt-oss-20b", "s", "p")["reasoning_effort"], "medium")
+            os.environ["PAGENT_REASONING_EFFORT"] = "low"
+            self.assertEqual(openai_compat.request_body("gpt-oss-20b", "s", "p")["reasoning_effort"], "low")
             os.environ["PAGENT_REASONING_EFFORT"] = "off"
             self.assertNotIn("reasoning_effort", openai_compat.request_body("gpt-oss-20b", "s", "p"))
             os.environ.pop("PAGENT_REASONING_EFFORT", None)
@@ -150,7 +158,7 @@ class RequirementsRegressions(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=False), patch.object(o, "_generate_once", fake_once), \
                 patch.object(o, "ESCALATE", {"next": False}):
             import os
-            os.environ.pop("PAGENT_REASONING_EFFORT", None)
+            os.environ["PAGENT_REASONING_EFFORT"] = "low"               # escalation applies to low only
             self.assertEqual(o.generate("s", "p"), ["ok", ""])          # empty WITH reasoning
             self.assertEqual(o.generate("s", "p"), ["ok", "(action list-files \".\")"])
             self.assertEqual(efforts, ["low", "medium"])                # only the repair call

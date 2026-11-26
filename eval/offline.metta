@@ -112,9 +112,12 @@
              "(plan (task t1 \"t\"))" "(replan \"c\")" "(replan \"d\")" "(replan \"e\")" "(replan \"f\")"
              "(replan \"g\")" "(replan \"h\")" "(replan \"i\")" "(replan \"j\")" "(replan \"k\")" "(replan \"l\")") stopped)
 !(loop-case "garbage replies" ("(plan (task t1 \"t\"))" "lol" "???" "(dance)" "x" "y") stopped)
+; Finals with tasks still open have their own budget (max-structural-rejections 5):
+; every one is refused, the script runs out first, and the run stops. What matters:
+; it never ends `done` (it used to expect done-unverified after 2 refusals).
 !(loop-case "claims done without doing the work"
             ("(plan (task t1 \"a\") (task t2 \"b\"))" "(final \"done!\")" "(final \"done!!\")" "(final \"DONE\")")
-            done-unverified)
+            stopped)
 
 ; ===================== 5. memory retrieval quality =====================
 !(collapse (let $a (get-atoms &kb) (remove-atom &kb $a)))

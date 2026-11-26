@@ -15,8 +15,9 @@ each call passes `execute`: known tool, input checks, call limit, permission,
 timeout, retry of temporary errors. The result becomes `(step N TOOL INPUT OUTCOME)`.
 
 **Plans.** A short single-step goal gets a one-task plan without an LLM call.
-Otherwise the model plans 1-3 tasks; a plan with a self-dependency or a cycle is
-sent back once to be corrected.
+Otherwise the model plans 1-3 tasks, each with any skills it needs; a plan with
+a bad shape, a self-dependency or a cycle is sent back once to be corrected, and
+written to the audit log with the reason.
 
 **Completion.** Pending tasks never close merely because their dependencies finished;
 answer-only tasks require an explicit `task-done` proposal before verification.
@@ -42,11 +43,13 @@ result identical to an earlier one is flagged as going in circles.
 **Safety.** Approval for side effects. `run-shell` runs read-only commands at
 once — checked by command **and option** (`sort -o f` asks; every `git` command
 asks, since repo config can run programs) — and kills a command after 60 s.
-No terminal means no. File tools stay in the workspace; `http-get` refuses
+The approval prompt shows the whole input; one approval runs once. No terminal
+means no. Untrusted text (pages, files, outputs) stays inside `<data>` fences it
+cannot close. File tools stay in the workspace; `http-get` refuses
 private addresses and binary files. Every memory write (facts, episodes,
 recovery fixes) passes the same sensitivity, size and pruning gates.
 
-**Evidence.** `sh tests/run_tests.sh`: 670+ checks with a scripted model (loop
+**Evidence.** `sh tests/run_tests.sh`: 780 checks with a scripted model (loop
 mechanics, safety, evidence rules). Real model: `scripts/record_logs.sh` runs
 three goals in one session (Groq `gpt-oss-120b`, with fallbacks). Two sessions
 in `logs/` hold the three verified tasks; the to-do app took 40 turns, 48 steps,

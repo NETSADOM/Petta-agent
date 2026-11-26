@@ -104,6 +104,21 @@ def audit(event, tool, tool_input, outcome, detail="", seconds=None):
     return True
 
 
+def audit_text(event, tool, text, outcome, detail=""):
+    """audit() for a long text worth keeping whole (a rejected plan): 4000 characters
+    of it instead of 500, so the line shows WHAT was wrong, not just that it was."""
+    entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "event": str(event),
+             "tool": str(tool), "input": as_text(text)[:4000],
+             "outcome": str(outcome), "detail": as_text(detail)[:500]}
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(AUDIT_PATH)), exist_ok=True)
+        with open(AUDIT_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
+    return True
+
+
 def run_verifier(spec, goal, answer, observations, timeout=10):
     """Run a developer verifier fn(goal, answer, observations) with a timeout.
     Returns ["ok", note] or ["error", reason]. A crash or timeout is a failure."""
