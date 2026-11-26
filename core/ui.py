@@ -96,6 +96,14 @@ def render(event):
         for t in (a[0] if a else []):
             tid, desc, status = t[0], t[1], t[2]
             _out(f"  {STATUS_ICON.get(str(status), '?')} {tid}  {desc}")
+    elif kind == "run-summary":
+        _out(dim("  run summary: " + fmt(a[0], 1000)))
+    elif kind == "run-score-line":
+        # (score N (outcome K) (turns T) ...) — report only, see agent.metta run-score
+        s = a[0] if a and isinstance(a[0], list) else []
+        total = s[1] if len(s) > 1 else "?"
+        parts = " · ".join(f"{p[0]} {p[1]}" for p in s[2:] if isinstance(p, list) and len(p) == 2)
+        _out(dim(f"  score: {total}/100  ({parts})"))
     elif kind == "step":
         n, task, tool, tool_input = a
         task_txt = "" if str(task) == "none" else dim(f"[{task}] ")
@@ -215,7 +223,7 @@ def show_result(result):
     r = result if isinstance(result, list) else [result]
     kind = str(r[0])
     if kind == "done":
-        _box(green("✔ verified answer"), r[1])
+        _box(green("✔ completed answer (configured checks passed)"), r[1])
     elif kind == "done-unverified":
         _box(red("✗ INCOMPLETE - this answer could not be verified, so the goal is not done"), r[1])
         _out(dim("  the checks kept failing (see the rejections above); treat it as a draft"))
@@ -247,7 +255,14 @@ def banner(tools, skills, stats):
         _out(yellow("  ⚠ no LLM configured: set GEMINI_API_KEY, or OPENAI_API_KEY + OPENAI_MODEL "
                     "(+ OPENAI_BASE_URL for other providers) — goals will fail until then"))
     _out(dim(f"  llm:    {llm_client.describe()}"))
-    _out(dim("  commands: help tools skills memory quit   ·   anything else is a goal"))
+    _out(dim("  commands: help tools skills memory history clear quit   ·   anything else is a goal"))
+    return True
+
+
+def clear_screen():
+    """`clear` / `cls` at the prompt: clear the terminal (it is never a goal)."""
+    if sys.stdout.isatty():
+        print("\033[2J\033[H", end="", flush=True)
     return True
 
 
@@ -258,6 +273,7 @@ def help_text():
         "  skills   declared skills and whether they are available",
         "  memory   what is stored in long-term memory",
         "  history  the goals of this session and how they ended",
+        "  clear    clear the screen (also: cls)",
         "  quit     save memory and exit",
         "  While the agent works: type c + Enter to cancel the current goal.",
     ]))

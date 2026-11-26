@@ -12,6 +12,9 @@
 ;                   use no for tools with side effects (shell) or a person (ask-user)
 ;       retries     how many times (default: config max-retries). Web tools use 1:
 ;                   a site that timed out rarely answers on the next try
+;       example     one typical INPUT, shown in the prompt as an exact call the model
+;                   can copy: (action NAME "INPUT"). Picking the right tool and
+;                   writing the call is then pattern-matching, not guessing.
 ;       auto-approve  module.function(input) → True when THIS input is harmless, so a
 ;                   needs-approval tool runs without asking (e.g. a read-only shell
 ;                   command). False, an error or a crash → you are asked as usual.
@@ -35,6 +38,7 @@
 (default-tool-option retries default)   ; how many retries; default = config max-retries
 (default-tool-option auto-approve none)
 (default-tool-option remember-approval no)
+(default-tool-option example none)
 
 ; ---------------- registry ----------------
 (= (declare-tool $name $desc $level $impl)

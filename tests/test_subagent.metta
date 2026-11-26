@@ -29,6 +29,9 @@
 ; settings are back to the main agent's
 !(test (config-value agent-depth) 0)
 !(test (config-value max-iterations) 40)
+; the helper's 3 turns count toward the parent's turn limit
+!(test (config-value helper-turns-used) 3)
+!(test (turns-used (current-turn)) 7)
 ; only the parent goal is a session task
 !(test (py-call (operator.contains (py-call (session.summary)) "shout the word helper")) False)
 
@@ -57,6 +60,19 @@
 !(test (let (1 delegate (error (helper-stopped (iteration-limit $p)))) (index-atom (outcomes) 0) ok) ok)
 !(test (repr (index-atom (outcomes) 1)) "(2 upper (ok PARENT DOES IT))")
 !(set-config sub-agent-turns 20)
+
+; ---------------- helpers cannot exceed the parent's turn limit ----------------
+; parent limit 3: after turn 1 only 2 are left, so the helper gets 2 (not 20);
+; its 2 turns + the parent's 2 = 4 > 3 → the PARENT stops at its limit
+!(set-config max-iterations 3)
+!(use-script ("(plan (task t1 \"t\"))"
+              "(action delegate \"long sub-task\")"
+              "(plan (task t1 \"sub\"))"
+              "(action upper \"a\")" "(action upper \"b\")" "(action upper \"c\")"))
+!(test (car-atom (index-atom (run-agent "budget") 1)) iteration-limit)
+!(test (config-value helper-turns-used) 2)
+!(test (config-value max-iterations) 3)
+!(set-config max-iterations 40)
 
 ; ---------------- a helper is not offered delegate (it cannot use it) ----------------
 (= (offers $tool) (not (== (collapse (let $all (prompt-tool-catalog)

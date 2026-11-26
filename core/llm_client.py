@@ -49,6 +49,16 @@ def describe(_=None):
     return f"gemini · {os.environ.get('GEMINI_MODEL', gemini.DEFAULT_MODEL)}"
 
 
+def last_reasoning(_=None):
+    """Hidden reasoning of the latest EMPTY reply ("" if none, or for Gemini)."""
+    return openai_compat.last_reasoning() if provider() == "openai" else ""
+
+
+def last_cut(_=None):
+    """True when the latest reply was cut off at the token limit (openai only)."""
+    return openai_compat.last_cut() if provider() == "openai" else False
+
+
 def calls(_=None):
     return CALLS["n"]
 

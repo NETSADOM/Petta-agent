@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P-agent</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f6f7f9; --line: #e1e4ea; --text: #1f2430; --muted: #6b7280;
+    --accent: #2f5fd0; --green: #1a7f37; --red: #c62828; --yellow: #9a6700; --violet: #7c3aed; --cyan: #0e7490;
+    --hover: #eef1f6; --button: #ffffff;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif;
+         display: grid; grid-template-rows: auto 1fr auto; }
+
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+           border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .status { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--green); box-shadow: 0 0 0 3px #1a7f3722; }
+  .dot.off { background: var(--red); }
+  .spacer { flex: 1; }
+  button { font: inherit; font-size: 13px; color: var(--text); background: var(--button); border: 1px solid var(--line);
+           border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  main { display: grid; grid-template-columns: 1fr 360px; min-height: 0; }
+  main.no-events { grid-template-columns: 1fr 0; }
+  main.no-events #events-pane { display: none; }
+
+  #term { margin: 0; padding: 14px 16px; overflow: auto; font: 13px/1.4 var(--mono);
+          white-space: pre-wrap; word-break: break-word; }
+  #events-pane { border-left: 1px solid var(--line); background: var(--panel); display: flex;
+                 flex-direction: column; min-height: 0; }
+  #events-pane h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+                    margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; }
+  #events-pane h2 span { flex: 1; }
+  #events { overflow: auto; flex: 1; font: 12px/1.35 var(--mono); }
+  .ev { padding: 7px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .ev:hover { background: var(--hover); }
+  .ev .top { display: flex; gap: 8px; align-items: baseline; }
+  .ev time { color: var(--muted); }
+  .ev .kind { font-weight: 600; }
+  .ev .tool { color: var(--cyan); }
+  .ev .sum { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .ev pre { display: none; margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--text); }
+  .ev.open pre { display: block; }
+  .ev.open .sum { display: none; }
+  .k-ok .kind { color: var(--green); } .k-bad .kind { color: var(--red); }
+  .k-ask .kind { color: var(--yellow); } .k-llm .kind { color: var(--violet); }
+  .empty-note { color: var(--muted); padding: 14px 12px; font: 12px/1.5 system-ui, sans-serif; }
+
+  footer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px; }
+  form { display: flex; gap: 8px; align-items: center; }
+  #mode { font: 12px var(--mono); color: var(--accent); min-width: 72px; }
+  #line { flex: 1; font: 14px var(--mono); color: var(--text); background: var(--bg); border: 1px solid var(--line);
+          border-radius: 6px; padding: 8px 10px; }
+  #quick { display: flex; gap: 6px; }
+  #quick button.yes { border-color: var(--green); } #quick button.no { border-color: var(--red); }
+
+  /* ANSI colours (core/ui.py uses SGR codes only) */
+  .b { font-weight: 700; } .d { opacity: .6; } .i { font-style: italic; } .u { text-decoration: underline; }
+  /* tuned for a light background: white/bright text would vanish, so 37/97 are dark */
+  .c30,.c90 { color: #6b7280; } .c31,.c91 { color: var(--red); } .c32,.c92 { color: var(--green); }
+  .c33,.c93 { color: var(--yellow); } .c34,.c94 { color: var(--accent); } .c35,.c95 { color: var(--violet); }
+  .c36,.c96 { color: var(--cyan); } .c37,.c97 { color: #374151; }
+  .d { opacity: .7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>P-agent</h1>
+  <div class="status"><span id="dot" class="dot"></span><span id="state">connecting…</span></div>
+  <div class="spacer"></div>
+  <button id="cancel" title="Cancel the current goal (the CLI's c + Enter)">Cancel goal</button>
+  <button id="restart" title="Stop the agent and start a new session">Restart</button>
+  <button id="toggle" title="Show or hide the backend events">Events</button>
+</header>
+
+<main id="main">
+  <pre id="term" aria-live="polite"></pre>
+  <section id="events-pane">
+    <h2><span>Backend events</span><button id="clear-ev" style="padding:1px 8px;font-size:11px">clear</button></h2>
+    <div id="events"><div class="empty-note">Tool calls, approvals and model events from the audit log
+      appear here as the agent works. Click one for its details.</div></div>
+  </section>
+</main>
+
+<footer>
+  <form id="form" autocomplete="off">
+    <span id="mode">—</span>
+    <input id="line" placeholder="Waiting for the agent…" spellcheck="false">
+    <div id="quick"></div>
+    <button type="submit">Send</button>
+  </form>
+</footer>
+
+<script>
+const term = document.getElementById("term");
+const eventsEl = document.getElementById("events");
+const line = document.getElementById("line");
+const modeEl = document.getElementById("mode");
+const quick = document.getElementById("quick");
+const MAX_NODES = 6000;
+
+// ---------- terminal: text with ANSI SGR codes → spans ----------
+let style = { b: false, d: false, i: false, u: false, c: null };
+let pending = "";            // an escape sequence cut in half between chunks
+let tail = "";               // last plain characters, to see what the agent waits for
+
+function applySGR(params) {
+  const codes = params === "" ? [0] : params.split(";").map(Number);
+  for (const c of codes) {
+    if (c === 0) style = { b: false, d: false, i: false, u: false, c: null };
+    else if (c === 1) style.b = true; else if (c === 2) style.d = true;
+    else if (c === 3) style.i = true; else if (c === 4) style.u = true;
+    else if (c === 22) { style.b = false; style.d = false; }
+    else if (c === 23) style.i = false; else if (c === 24) style.u = false;
+    else if ((c >= 30 && c <= 37) || (c >= 90 && c <= 97)) style.c = c;
+    else if (c === 39) style.c = null;
+  }
+}
+
+function emitText(text) {
+  if (!text) return;
+  const cls = [style.b && "b", style.d && "d", style.i && "i", style.u && "u", style.c && "c" + style.c]
+    .filter(Boolean).join(" ");
+  const last = term.lastChild;
+  if (last && last.nodeType === 1 && last.className === cls) last.textContent += text;
+  else {
+    const span = document.createElement("span");
+    if (cls) span.className = cls;
+    span.textContent = text;
+    term.appendChild(span);
+  }
+  tail = (tail + text).slice(-400);
+}
+
+function write(chunk) {
+  const stick = term.scrollHeight - term.scrollTop - term.clientHeight < 40;
+  let s = (pending + chunk).replace(/\r\n/g, "\n").replace(/\r(?!\n)/g, "");
+  pending = "";
+  const cut = s.lastIndexOf("\x1b");
+  if (cut !== -1 && !/^\x1b\[[0-9;?]*[A-Za-z]/.test(s.slice(cut))) { pending = s.slice(cut); s = s.slice(0, cut); }
+  const re = /\x1b\[([0-9;?]*)([A-Za-z])/g;
+  let pos = 0, m;
+  while ((m = re.exec(s))) {
+    emitText(s.slice(pos, m.index));
+    if (m[2] === "m") applySGR(m[1]);
+    else if (m[2] === "J" && m[1] === "2") { term.textContent = ""; }
+    pos = re.lastIndex;
+  }
+  emitText(s.slice(pos));
+  while (term.childNodes.length > MAX_NODES) term.removeChild(term.firstChild);
+  if (stick) term.scrollTop = term.scrollHeight;
+  updateMode();
+}
+
+// ---------- what is the agent waiting for? ----------
+function quickButtons(list) {
+  quick.textContent = "";
+  for (const [label, value, cls] of list) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label; if (cls) b.className = cls;
+    b.onclick = () => send(value);
+    quick.appendChild(b);
+  }
+}
+
+let running = false;
+function updateMode() {
+  if (!running) { setMode("stopped", "The agent is not running: press Restart", []); return; }
+  if (/you> $/.test(tail)) setMode("goal", "Type a goal, or: help · tools · skills · memory · history · quit", []);
+  else if (/\[y\/N\/a[^\]]*\] $/.test(tail))
+    setMode("approve?", "Approve this step? y = yes, N = no, a = allow this tool for the session",
+            [["Yes", "y", "yes"], ["No", "n", "no"], ["Always", "a", ""]]);
+  else if (/\[y\/N\] $/.test(tail))
+    setMode("approve?", "Approve this step? y = yes, anything else = no", [["Yes", "y", "yes"], ["No", "n", "no"]]);
+  else if (/\n> $/.test(tail)) setMode("answer", "The agent asked you a question: type your answer", []);
+  else setMode("working", "The agent is working… type c + Enter (or press Cancel goal) to stop this goal", []);
+}
+let lastMode = "";
+function setMode(mode, placeholder, buttons) {
+  if (mode === lastMode) return;
+  lastMode = mode;
+  modeEl.textContent = mode;
+  line.placeholder = placeholder;
+  quickButtons(buttons);
+  if (mode !== "working") line.focus();
+}
+
+// ---------- backend events (audit log) ----------
+let sawEvent = false;
+function kindClass(e) {
+  const o = String(e.outcome).toLowerCase();
+  if (["empty-reply", "model-switch"].includes(e.event) || e.tool === "llm") return "k-llm";
+  if (e.event === "approval") return o === "false" ? "k-bad" : "k-ask";
+  if (e.event === "denied" || o.includes("error") || o === "false") return "k-bad";
+  return "k-ok";
+}
+function addEvent(e) {
+  if (!sawEvent) { eventsEl.textContent = ""; sawEvent = true; }
+  const stick = eventsEl.scrollHeight - eventsEl.scrollTop - eventsEl.clientHeight < 40;
+  const row = document.createElement("div");
+  row.className = "ev " + kindClass(e);
+  const top = document.createElement("div"); top.className = "top";
+  const t = document.createElement("time"); t.textContent = String(e.time || "").slice(11);
+  const k = document.createElement("span"); k.className = "kind"; k.textContent = e.event;
+  const tool = document.createElement("span"); tool.className = "tool"; tool.textContent = e.tool || "";
+  const out = document.createElement("span"); out.textContent = e.outcome ? "→ " + e.outcome : "";
+  top.append(t, k, tool, out);
+  const sum = document.createElement("div"); sum.className = "sum";
+  sum.textContent = e.input || e.detail || "";
+  const pre = document.createElement("pre");
+  pre.textContent = [e.input && "input: " + e.input, e.detail && "detail: " + e.detail,
+                     e.seconds != null && "seconds: " + e.seconds].filter(Boolean).join("\n\n") || "(no details)";
+  row.append(top, sum, pre);
+  row.onclick = () => row.classList.toggle("open");
+  eventsEl.appendChild(row);
+  while (eventsEl.childNodes.length > 1500) eventsEl.removeChild(eventsEl.firstChild);
+  if (stick) eventsEl.scrollTop = eventsEl.scrollHeight;
+}
+
+// ---------- connection ----------
+function setRunning(on) {
+  running = on;
+  document.getElementById("dot").className = "dot " + (on ? "on" : "off");
+  document.getElementById("state").textContent = on ? "agent running" : "agent stopped";
+  lastMode = ""; updateMode();
+}
+const es = new EventSource("/events");
+es.addEventListener("out", ev => write(JSON.parse(ev.data)));
+es.addEventListener("audit", ev => addEvent(JSON.parse(ev.data)));
+es.addEventListener("state", ev => setRunning(JSON.parse(ev.data).running));
+es.onerror = () => { document.getElementById("dot").className = "dot off";
+                     document.getElementById("state").textContent = "disconnected — retrying…"; };
+
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify(body || {}) });
+  return r.json();
+}
+const sent = []; let hpos = 0;
+function send(text) {
+  post("/input", { text });
+  if (text && sent[sent.length - 1] !== text) sent.push(text);
+  hpos = sent.length;
+  line.value = "";
+  line.focus();
+}
+document.getElementById("form").onsubmit = e => { e.preventDefault(); send(line.value); };
+line.addEventListener("keydown", e => {
+  if (e.key === "ArrowUp" && hpos > 0) { line.value = sent[--hpos]; e.preventDefault(); }
+  if (e.key === "ArrowDown") { hpos = Math.min(sent.length, hpos + 1); line.value = sent[hpos] || ""; e.preventDefault(); }
+});
+document.getElementById("cancel").onclick = () => post("/cancel");
+document.getElementById("restart").onclick = () => {
+  if (confirm("Stop the agent and start a new session? (memory is saved after every goal)")) {
+    term.textContent = ""; post("/restart");
+  }
+};
+document.getElementById("toggle").onclick = () => document.getElementById("main").classList.toggle("no-events");
+document.getElementById("clear-ev").onclick = () => { eventsEl.textContent = ""; };
+line.focus();
+</script>
+</body>
+</html>

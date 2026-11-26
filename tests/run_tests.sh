@@ -4,6 +4,7 @@
 # The live Gemini test runs only when GEMINI_API_KEY is set in this shell.
 cd "$(dirname "$0")/.." || exit 1
 export PAGENT_NO_DOTENV=1        # never pick up API keys from .env in tests
+python3 -m unittest discover -s tests -p 'test_regressions.py' || exit 1
 rm -f data/test_kb.metta data/test_schema_kb.metta data/test_memory_kb.metta data/test_cli_kb.metta data/audit.jsonl
 
 run() {  # run [ENV-PREFIX...] FILE

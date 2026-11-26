@@ -31,7 +31,7 @@ learned fixes — saved to `data/kb.metta` after every goal, reloaded at start).
 | Provider | Environment variables |
 |---|---|
 | Gemini | `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`) |
-| any OpenAI-compatible API | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL` |
+| any OpenAI-compatible API | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL` (+ optional `OPENAI_FALLBACK_MODELS`) |
 
 `PAGENT_PROVIDER=gemini|openai` forces one; otherwise Gemini if its key is
 set, else OpenAI-compatible. Examples for `OPENAI_BASE_URL`:
@@ -39,6 +39,9 @@ OpenAI `https://api.openai.com/v1` (default), OpenRouter
 `https://openrouter.ai/api/v1`, Groq `https://api.groq.com/openai/v1`,
 Ollama `http://localhost:11434/v1` (no key needed for local servers).
 `OPENAI_MODEL` is required — model names differ per provider, so none is guessed.
+`OPENAI_FALLBACK_MODELS` (comma-separated, e.g.
+`openai/gpt-oss-20b,qwen/qwen3.8-27b` on Groq) is used in order when the current
+model's daily quota runs out, so a long goal goes on instead of stopping.
 Both providers return the same `(ok text)` / `(error KIND msg)`, so recovery,
 verification and the loop don't know which one is used.
 
@@ -149,6 +152,8 @@ core/recovery.metta     error classes, retry, alternatives, hints, learned fixes
 core/verify.metta       3-layer verification of final answers
 core/ui.py              CLI renderer (the only file that decides how output looks), cancel check
 main.metta              CLI:  sh run.sh main.metta
+web/server.py           web UI: the same CLI in a browser tab, plus live backend events
+web/index.html          its page (terminal view, approval buttons, events panel)
 my_capabilities.metta   YOUR tools and skills (imported by main.metta)
 tests/fake_tools.py     test-only fake tools (fake_openai.py: a local fake LLM server)
 tests/test_*.metta      one file per part; test_agent_tools, test_long_task and
@@ -171,6 +176,7 @@ No Python packages beyond the standard library.
 git clone https://github.com/NETSADOM/PeTTa-Agent.git && cd PeTTa-Agent
 echo 'GEMINI_API_KEY=...' > .env   # or OPENAI_API_KEY + OPENAI_MODEL (+ OPENAI_BASE_URL); .env is git-ignored
 sh run.sh main.metta          # start the agent: type goals, one after another
+python3 web/server.py         # or the same agent in a browser: http://localhost:8765
 sh tests/run_tests.sh         # expect: ALL TESTS PASSED (no key needed)
 sh run.sh some_file.metta     # run any MeTTa file
 ```
@@ -192,12 +198,32 @@ sh run.sh some_file.metta     # run any MeTTa file
 | Shell timeouts; destructive commands need approval | `run_shell` (60 s, kills the process group), `shell_is_read_only` allow-list | `tests/test_agent_tools.metta` |
 | Optional: web search | `web-search` (DuckDuckGo), `wiki-search`, `http-get` | `tests/test_subagent.metta` (parser), `tests/test_llm_live.metta` |
 | Extra: sub-agents | `delegate` in `core/agent.metta` (`run-helper`) | `tests/test_subagent.metta` |
-| Logs of 3 tasks, one > 20 turns | `logs/` (recorded with `scripts/record_logs.sh`) | — |
+| Logs of 3 tasks, one > 20 turns | `logs/` (recorded with `scripts/record_logs.sh`), see [Logs](#logs-of-completed-tasks) | — |
+
+## Logs of completed tasks
+
+Real model (Groq, `openai/gpt-oss-120b`, falling back to `gpt-oss-20b` and
+`qwen/qwen3.8-27b` when a daily quota ran out), recorded by
+`scripts/record_logs.sh` with the goals in `logs/goals.txt`. The driver plays
+the user and answers `y` at approval prompts; everything it typed is in the log.
+
+| Task | Log | Outcome |
+|---|---|---|
+| Revenue per region from `sales.csv`, saved as a markdown table | `logs/session-20261126-040040.log` (task 1) | ✔ verified, 5 turns; first read a wrong path, got the error, listed the files and recovered. Totals north 5400, south 4490, east 1080, total 10970 (checked by hand) |
+| Welcome note saved as `welcome.md` | `logs/session-20261126-040040.log` (task 2) and `logs/session-20261126-041927.log` (task 2) | ✔ verified, 2–4 turns |
+| **Long task:** 6-step command-line to-do app (code, unittest tests, run and fix until they pass, demo, folder check, README, a progress message per step) | `logs/session-20261126-041927.log` (task 3) | ✔ verified, **40 turns, 48 steps**: 15 failed steps along the way (failing tests, fixed and re-run), two model switches mid-task. Result in `logs/run-workspace/todo/`; its 7 tests pass when re-run independently |
+
+The same sessions also show the failure handling: in `041927` task 1 the model
+kept sending empty replies and the run stopped with a plain "I'm stuck" report
+(fixed since: the repair retry now uses more reasoning effort); in `040040`
+task 3 the agent gave up after two early finals with 5 tasks open (fixed since:
+early finals have their own budget, which the `041927` run used). Every tool
+call and approval of the latest recording is in `logs/audit.jsonl`.
 
 ## The CLI (`main.metta` + `core/ui.py`)
 
 ```
-P-agent  — MeTTa/PeTTa reasoning + Gemini
+P-agent  — MeTTa/PeTTa reasoning + an LLM
   tools:  calc, web-search
   memory: (facts 12 episodes 3 capability-gaps 1)
 you> shout hello, fetch data, save a note
@@ -211,7 +237,7 @@ Plan
     ✓ worked on try 3
   ? allow write-note with input HELLO 3 ? [y/N] y
   ✎ remembered (greeting-word hello)
-✔ verified answer
+✔ completed answer (configured checks passed)
   HELLO, fetched on try 3, note saved
 ```
 
@@ -239,6 +265,8 @@ operand that writes or runs something (`git diff --output=f`,
 `git branch --delete=x`, `git branch NEW`, `git -c ...`, `sort -o f`,
 `tree -o f`, `file -C`, `rg --pre`, `uniq IN OUT`, `date -s`). An unknown
 option of `git branch`/`tag`/`remote` asks too.
+Long options must match an explicitly permitted name: abbreviations such as
+`sort --out=file` and `git diff --out=file` require approval too.
 `write-file` creates new files at once and asks before overwriting one. With no
 terminal (EOF) the answer is **no**.
 
@@ -254,6 +282,30 @@ previous goal). `PAGENT_KB` sets the memory file (default `data/kb.metta`).
 (schema.metta). With `(config ui pretty)` events go to `ui.render`; otherwise
 they print as plain atoms (tests). A web UI = a new renderer + input source;
 `core/agent.metta` stays unchanged.
+
+## Web UI (`web/`)
+
+```bash
+python3 web/server.py              # then open http://localhost:8765  (--port N to change)
+```
+
+A minimal browser front end, standard library only. The server runs the normal
+CLI (`sh run.sh main.metta`) in a pseudo-terminal, so it behaves exactly as in a
+terminal: colours, approvals, questions, `c` + Enter to cancel. The page has:
+
+- **terminal**: everything the agent prints, live;
+- **input bar**: it shows what the agent waits for (`goal`, `approve?` with
+  Yes / No / Always buttons, `answer` to an ask-user question, `working`);
+  ↑/↓ recall earlier lines;
+- **backend events**: each line the agent appends to the audit log
+  (`PAGENT_AUDIT`, default `data/audit.jsonl`): tool calls with their outcome
+  and time, approvals and denials, verification checks, model switches, empty
+  replies. Click one for its full input and detail;
+- **Cancel goal** and **Restart** (a new session; memory was saved after every goal).
+
+One agent session is shared by every open tab. The server listens on
+localhost only and refuses cross-site requests, because the agent can run
+shell commands. From WSL, `http://localhost:8765` opens in a Windows browser.
 
 ## Evaluation (`eval/`)
 
@@ -506,7 +558,7 @@ A `(final ..)` is accepted only if every layer passes, in order:
 |---|---|---|---|
 | 1 symbolic | PeTTa | all plan tasks completed; answer not empty | proves the *process* ran, not that the answer is true |
 | 2 objective | your Python checks | `fn(goal, answer, observations)`; global (`declare-verifier`) or per skill (`set-skill-verifier`); crash/timeout = fail | only as good as the checks you write |
-| 3 semantic | a **separate** LLM call | "do the observations support the answer?" — told not to use its own knowledge | an LLM judging an LLM can be fooled; costs 1 call; unreachable/unreadable → `unknown` (not blocking). **Skipped** when a conclusive check already proved the answer (`set-conclusive-verifier`; math: the answer states calc's result) |
+| 3 semantic | a **separate** LLM call | "do the observations support the answer?" — told not to use its own knowledge | an LLM judging an LLM can be fooled; costs 1 call; unreachable/unreadable → `unknown`, which rejects completion. **Skipped** only for a conclusive check; the built-in math shortcut requires a bare arithmetic goal, a bare numeric answer, a matching successful calc result, and an independent recalculation. Word problems and compound answers use the semantic checker. |
 
 A layer that fails stops the chain (no wasted LLM call). The failure goes
 back to the model as `(error (verification-failed (...)))`; after
@@ -641,8 +693,29 @@ The key is never written into error messages.
 - [x] Extra: sub-agents (`delegate`), web search
 - [x] 670+ offline checks (`sh tests/run_tests.sh`), offline evaluation 45/50 (100 % on every safety category)
 - [x] Live model check (`tests/test_llm_live.metta`) with `gemini-3.8-flash`
-- [ ] Logs of 3 real tasks: `sh scripts/record_logs.sh` (needs a model with enough quota: the Gemini free tier allows only 20 requests per model per day, a full session needs about 100)
+- [x] Logs of 3 real tasks, one of 40 turns: see [Logs of completed tasks](#logs-of-completed-tasks) (a full session needs about 100 model calls; free tiers run out, hence `OPENAI_FALLBACK_MODELS`)
 - [ ] Live evaluation: `sh eval/run_eval.sh` with a key set
+
+For fresh independent validation, `scripts/validation_goals.txt` contains three
+goals for one CLI session, including a dependent 22-month savings ledger.
+It is a validation fixture, not a completed-task log. Run it with
+`scripts/drive_session.py` in a fresh workspace and memory file. Each goal now
+prints a run summary with explicit turns and steps; verify the generated files
+independently before counting a successful run.
+
+Research recovery: Wikipedia results are checked for topic overlap instead of
+blindly taking the first hit. Verification receives stored tool outcomes (not
+previous answer drafts); sources that fit the evidence budget are kept whole,
+and larger ones use marked passages relevant to the goal and candidate answer.
+The latest rejection stays in recovery hints across bookkeeping steps. Unfinished
+plan rejections (`max-structural-rejections`, 5) and content rejections
+(`max-final-rejections`, 2) have separate bounded retry counts.
+After a failed format-repair request, substantial plain prose can be converted
+to a final proposal only when semantic verification is enabled; it still passes
+all completion checks. An empty reply whose hidden reasoning named a step is
+repaired with medium reasoning effort for that one call; empty replies still use
+bounded retries and can stop a run. Groq's `output_parse_failed` (400) is
+recovered from `failed_generation` and repaired like any unusable reply.
 
 ### Known limitations (from the evaluation)
 - Memory retrieval and skill discovery use word overlap: no synonyms.

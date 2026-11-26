@@ -10,7 +10,7 @@
 ;                               !(set-skill-verifier research my_checks.cites)    tasks using the skill
 ; Layer 3 SEMANTIC (LLM)      a SEPARATE call: do the observations support the answer?
 ;                             (config verify-semantic on|off). If the LLM can't be
-;                             reached or replies nonsense → "unknown": not blocking.
+;                             reached or replies nonsense → "unknown": blocks verification.
 ; Layers run in order and stop at the first failing layer (saves LLM calls).
 ; The outcome of each layer is stored: (verification N LAYER RESULT) in &wm.
 
@@ -54,10 +54,16 @@
 (= (unfinished-problem)
    (let* (($o (open-tasks))
           ($hints (map-atom $o $id (task-tool-hint $id))))   ; bind: data is not evaluated
-         (unfinished $o "no tool results yet for these tasks: run the tools they need (run-first) and then send final; a task whose work needs no tool can be marked (task-done ID ...), several in ONE reply" $hints)))
+         (unfinished $o "these tasks are still OPEN, so the goal is not done: do NOT send final again yet. If you already did a task's work, close it now with (task-done ID ...), several in ONE reply. Then do the next open task with its tools (run-first), one task at a time, and send final only when every task is done" $hints)))
 
 ; questions the user did not answer: the answer must not fill them in by guessing
-(= (unanswered-questions) (collapse (match &wm (step $n ask-user $q (error $e)) $q)))
+(= (answered-after $q $n)
+   (not (== (collapse (match &wm (step $m ask-user $q (ok $a))
+                             (if (> $m $n) yes (empty)))) ())))
+
+(= (unanswered-questions)
+   (unique-atom (collapse (match &wm (step $n ask-user $q (error $e))
+                               (if (answered-after $q $n) (empty) $q)))))
 
 (= (guessing-problem $answer)
    (let $qs (unanswered-questions)
@@ -96,10 +102,20 @@
 ; → pass | (unsupported "why") | unknown (verifier unreachable / unparseable) | skipped
 ; the model replies (verdict supported "why") or (verdict unsupported "why").
 ; ("fail" is avoided as a symbol: it is a core Prolog word under PeTTa.)
+; An `unknown` (empty reply, network error, unparseable verdict) says nothing
+; about the ANSWER, only about the checker: it is asked once more at once,
+; instead of rejecting the final and costing the model a turn.
 (= (semantic-verdict $answer)
    (if (== (config-value verify-semantic) on)
-       (let $r (ask-llm (py-call (prompts.verify_system))
-                        (py-call (prompts.verify_prompt (goal-text) (tasks-repr) (all-steps-repr) $answer)))
+       (let $v (semantic-verdict-once $answer)
+            (if (== $v unknown) (semantic-verdict-once $answer) $v))
+       skipped))
+
+(= (semantic-verdict-once $answer)
+   (let $r (ask-llm (py-call (prompts.verify_system))
+                        (py-call (prompts.verify_prompt (goal-text) (tasks-repr)
+                          (py-call (prompts.verification_evidence (goal-text) $answer
+                            (collapse (match &wm (step $n $t $i $o) ($n $t $i $o))))) $answer)))
             (case $r
                   (((ok $text)
                       (let $v (parse-reply $text)
@@ -107,8 +123,7 @@
                                  (((verdict supported $why) pass)
                                   ((verdict unsupported $why) (unsupported $why))
                                   ($other unknown)))))
-                   ($err unknown))))
-       skipped))
+                   ($err unknown)))))
 
 (= (is-unsupported $v) (if (is-expression $v) (== (car-atom $v) unsupported) False))
 
@@ -129,6 +144,11 @@
                        $p2
                        (let* (($v (if (proven $answer) skipped-proven (semantic-verdict $answer)))
                               ($r3 (note-layer $n semantic $v)))
-                             (if (is-unsupported $v)
-                                 ((semantic (index-atom $v 1)))
-                                 ())))))))
+                             ; checker-unavailable has its OWN rejection budget (agent.metta
+                             ; rejection-kind): a broken checker must not use up the
+                             ; budget for answers that were actually judged wrong
+                             (if (== $v unknown)
+                                 ((checker-unavailable "verification unavailable or invalid: retry verification; do not claim success"))
+                                 (if (is-unsupported $v)
+                                     ((semantic (index-atom $v 1)))
+                                     ()))))))))

@@ -188,9 +188,14 @@ def render(views, limit=6000):
     return "\n\n".join(parts)
 
 
-def render_task(task, desc, views, limit=6000):
-    """The CURRENT TASK block of the act prompt."""
+def render_task(task, desc, views, limit=6000, tools=()):
+    """The CURRENT TASK block of the act prompt. tools: the rows of the tools
+    its skills use, shown as exact calls right under the task."""
+    from prompts import task_tools
     head = f"{task} \"{desc}\""
+    calls = task_tools(tools)
+    if calls:
+        head += "\n" + calls
     if not views:
         return head + "\nSkill guide: none (load one with (action read-skill \"NAME\") if a skill fits)"
     return head + "\nSkill guide(s) - follow them:\n" + render(views, limit)

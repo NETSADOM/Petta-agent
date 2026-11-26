@@ -116,7 +116,28 @@
             $p
             (invalid bad-shape))))
 
-(= (check-proposal $p)
+; (action write-file "PATH" "CONTENT") → (action write-file "{\"path\": .., \"content\": ..}")
+; The JSON input puts JSON inside a MeTTa string: every quote in the content
+; needs TWO levels of escaping, and one slip in a long summary lost the whole
+; reply (seen: a 3-paper summary refused as unusable). Two plain strings need
+; one level, like a final. Also inside a batch.
+(= (normalize-call $c)
+   (if (and (is-expression $c) (== (size-atom $c) 4))
+       (if (and (== (car-atom $c) action) (== (index-atom $c 1) write-file))
+           (action write-file (as-string (py-call (reply_parser.write_file_input (index-atom $c 2) (index-atom $c 3)))))
+           $c)
+       $c))
+
+(= (normalize-proposal $p)
+   (if (and (is-expression $p) (not (== $p ())))
+       (if (== (car-atom $p) actions)
+           (cons-atom actions (map-atom (cdr-atom $p) $c (normalize-call $c)))
+           (normalize-call $p))
+       $p))
+
+(= (check-proposal $p) (check-normalized (normalize-proposal $p)))
+
+(= (check-normalized $p)
    (if (is-expression $p)
        (if (== $p ())
            (invalid bad-shape)
@@ -339,11 +360,22 @@
         (or (== $p (invalid no-expression))
             (or (== $p (invalid unparseable)) (== $p (invalid bad-shape))))))
 
+; An EMPTY reply from a thinking model usually has the step in its hidden
+; reasoning ("Use calc tool."): the retry shows that reasoning and the exact
+; call of each tool it names (prompts.empty_reply_help).
 (= (repair-reply $req)
    (let* (($shown (py-call (reply_parser.last_reply)))
+          ($why (py-call (llm_client.last_reasoning)))
+          ($cut (py-call (llm_client.last_cut)))       ; cut off at the token limit: "shorter"
           ($s (emit (reply-repair $shown)))
-          ($r (ask-llm (py-call (prompts.act_system)) (py-call (prompts.act_retry $req $shown)))))
+          ($r (ask-llm (py-call (prompts.act_system))
+                       (py-call (prompts.act_retry $req $shown $why (prompt-tool-rows) $cut)))))
          (case $r
-               (((ok $text) (check-proposal (parse-reply $text)))
+               (((ok $text)
+                   (let $p (check-proposal (parse-reply $text))
+                        (if (and (unusable-reply $p) (== (config-value verify-semantic) on))
+                            (let $fallback (check-proposal (parse-reply (py-call (reply_parser.prose_final $text))))
+                                 (if (== (car-atom $fallback) final) $fallback $p))
+                            $p)))
                 ($err $err)))))
 

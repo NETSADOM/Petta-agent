@@ -121,10 +121,32 @@
             (collapse (let $t (superpose $all)
                            (if (== (car-atom $t) delegate) (empty) $t))))))
 
+; What the model reads: one line per tool (name [permission]: what it does) and
+; under it an EXACT call to copy, (action NAME "example input"). With a bare
+; (name "desc" level) list, models knew WHICH tool to use but often not how to
+; write the call (seen: gpt-oss reasoned "Use calc tool." and sent nothing).
+; read from &caps directly (not tool-option): context works without tools.metta
+(= (tool-example $n)
+   (let $x (collapse (match &caps (tool-setting $n example $e) $e))
+        (if (== $x ()) none (car-atom $x))))
+(= (tool-row $t) (let ($n $d $l) $t ($n $d $l (tool-example $n))))
+(= (prompt-tool-rows) (map-atom (prompt-tool-catalog) $t (tool-row $t)))
+(= (tools-text) (py-call (prompts.render_tools (prompt-tool-rows))))
+
+; the tools the current task's skills name (skill-needs), offered ones only:
+; shown inside the CURRENT TASK block, so the right tool is right there
+(= (task-tool-rows $id)
+   (let* (($offered (prompt-tool-rows))
+          ($skills (skills-of-task $id))                ; bound first: superpose does not evaluate
+          ($wanted (unique-atom (collapse (let $s (superpose $skills)
+                                               (match &caps (skill-needs $s $x) $x))))))
+         (collapse (let $r (superpose $offered)
+                        (if (is-member (car-atom $r) $wanted) $r (empty))))))
+
 ; The planner sees ALL available skills (name + description) and short
 ; summaries of the best matches; it may pick any skill, matched or not.
 (= (plan-request)
-   (py-call (prompts.plan_prompt (goal-text) (repr (prompt-tool-catalog)) (repr (skill-catalog))
+   (py-call (prompts.plan_prompt (goal-text) (tools-text) (repr (skill-catalog))
                                  (recommended-skills-text (goal-text))
                                  (tasks-repr) (steps-repr) (facts-repr) (episodes-repr)
                                  (py-call (session.summary)))))
@@ -136,14 +158,32 @@
             "none"
             (py-call (skill_files.render_task $t (match &wm (task $t $d $s) $d)
                                               (skill-views (skills-of-task $t))
-                                              (config-value skill-guide-chars))))))
+                                              (config-value skill-guide-chars)
+                                              (task-tool-rows $t))))))
+
+; PROGRESS shows the turns used INCLUDING those of helpers (agent.metta turns-used),
+; so the model paces itself by what is really left. Unset (context loaded
+; without agent.metta, or inside a helper) → own turns only.
+(= (prompt-turn)
+   (let $h (collapse (config-value helper-turns-used))
+        (if (and (== (collapse (config-value agent-depth)) (0)) (not (== $h ())))
+            (+ (current-turn) (car-atom $h))
+            (current-turn))))
 
 (= (act-request)
    (py-call (prompts.act_prompt (goal-text) (tasks-repr) (current-task-repr) (steps-repr)
-                                (repr (prompt-tool-catalog)) (facts-repr) (repr (recovery-hints))
-                                (current-turn) (config-value max-iterations)
+                                (tools-text) (facts-repr) (repr ((latest-final-feedback) (recovery-hints)))
+                                (prompt-turn) (config-value max-iterations)
                                 (py-call (session.summary)) (repr (skill-catalog))
                                 (repr (note-list)))))
+
+; Keep verification feedback visible even after task-done or other successful
+; calls, which would otherwise replace the last-failure recovery hints.
+(= (latest-final-feedback)
+   (let $rejected (sort-atom (collapse (match &wm (step $n finish $a (error (verification-failed $p)))
+                                              ((- 0 $n) $p))))
+        (if (== $rejected ()) none
+            (final-feedback (index-atom (car-atom $rejected) 1)))))
 
 ; size of what is sent each iteration (for measuring)
 (= (context-chars) (py-call (toolrunner.length (act-request))))

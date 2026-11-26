@@ -22,10 +22,12 @@
 !(declare-tool send-message "show the user a message now (progress, a partial result, a warning) without waiting for a reply; input is the message text" safe metta)
 !(set-tool-option send-message retry no)
 !(set-tool-option send-message max-length 4000)
+!(set-tool-option send-message example "2 of 4 files read; now comparing them")
 !(declare-tool ask-user "ask the user a question and wait for the answer; only when you cannot continue without them. Input is the question." safe metta)
 !(set-tool-option ask-user retry no)
 !(set-tool-option ask-user max-length 1000)
 !(set-tool-option ask-user max-calls 5)
+!(set-tool-option ask-user example "Which file should I use: a.csv or b.csv?")
 
 (= (metta-tool send-message $text) (py-call (io_helper.send_message $text)))
 (= (metta-tool ask-user $question) (py-call (io_helper.ask_user $question)))
@@ -38,6 +40,7 @@
 !(declare-tool note "your notebook, kept and shown all run (old steps get shortened). Input KIND: text with KIND found, file, decision, todo or blocker; or drop: nN to remove note N" safe metta)
 !(set-tool-option note retry no)
 !(set-tool-option note max-length 600)
+!(set-tool-option note example "found: the report total is 4210")
 !(set-config note-max 15)
 
 (= (metta-tool note $in)
@@ -101,8 +104,10 @@
 !(set-config max-failures-in-row 8)  ; this many failed steps in a row (any tools) = stuck
 !(set-config agent-depth 0)          ; 0 = the main agent, 1 = a helper (sub-agent)
 !(set-config sub-agent-turns 20)     ; turn limit of one helper run
+!(set-config helper-turns-used 0)    ; turns helpers used for the current goal (count toward max-iterations)
 !(set-config delegate off)           ; on = offer delegate to the model (context.metta)
 !(set-config max-final-rejections 2) ; then accept final as done-unverified
+!(set-config max-structural-rejections 5) ; finals refused only because tasks are still open
 
 (= (show $x) (emit $x))      ; all output goes through emit (schema.metta)
 
@@ -166,11 +171,16 @@
 (= (run-agent $goal)
    (let* (($c (clear-wm))
           ($g (set-goal $goal))
+          ($main0 (== (config-value agent-depth) 0))
+          ($h (if $main0 (set-config helper-turns-used 0) ()))   ; a new goal: no helper turns yet
+          ($calls0 (py-call (llm_client.calls)))                 ; for the score: calls of THIS goal
           ($plan (make-plan))
           ($s (show (plan-result $plan)))
           ($s2 (if (== (task-list) ()) () (show (plan (task-list)))))
           ($s3 (if (fatal $plan) () (show (cancel-hint))))
           ($result (if (fatal $plan) (stopped $plan) (agent-loop 1)))
+          ($summary (show (run-summary (progress-report))))
+          ($score (if $main0 (report-score (run-score $result (- (py-call (llm_client.calls)) $calls0))) ()))
           ($rep (if (== (car-atom $result) stopped) (show (stuck-report $result)) ()))
           ($ses (if (== (config-value agent-depth) 0)                     ; helpers are not session tasks
                     (py-call (session.record (goal-text) (repr $result))) ()))
@@ -181,14 +191,51 @@
           ($f (if (and $main (== (car-atom $result) done)) (learn-recoveries) ())))   ; what fixed failures
          $result))
 
+; ---------------- run score (REPORT ONLY) ----------------
+; Shown after the run and written to the audit log, so changes (prompts, models,
+; limits) can be compared on the same goals. Never shown to the model and never
+; used by the loop: it decides nothing. The OUTCOME dominates — a fast wrong run
+; can never beat a slow verified one:
+;   done 60-100 (60 + efficiency 0-40) · blocked 40 · done-unverified 20 · stopped/cancelled 0
+; efficiency = 40 - (turns - 1) - 2 per invalid reply - 2 per failed step
+;              - 5 per rejected final - extra LLM calls (beyond 1 per turn + 2)
+(= (clamp $lo $hi $x) (if (< $x $lo) $lo (if (> $x $hi) $hi $x)))
+
+(= (outcome-base $kind)
+   (case $kind ((done 60) (blocked 40) (done-unverified 20) ($other 0))))
+
+(= (all-failed-steps) (size-atom (collapse (match &wm (step $n $t $i (error $e)) $n))))
+
+(= (run-score $result $calls)
+   (let* (($kind (car-atom $result))
+          ($turns (+ (current-turn) (config-value helper-turns-used)))
+          ($invalid (count-errors gemini))
+          ($rejected (count-errors finish))
+          ($failed (- (- (all-failed-steps) $invalid) $rejected))
+          ($extra (clamp 0 1000 (- $calls (+ $turns 2))))
+          ($penalty (+ (+ (- $turns 1) (* 2 $invalid)) (+ (+ (* 2 $failed) (* 5 $rejected)) $extra)))
+          ($eff (if (== $kind done) (clamp 0 40 (- 40 $penalty)) 0)))
+         (score (+ (outcome-base $kind) $eff) (outcome $kind) (turns $turns) (llm-calls $calls)
+                (invalid-replies $invalid) (failed-steps $failed) (rejected-finals $rejected))))
+
+(= (report-score $s)
+   (let* (($e (show (run-score-line $s)))
+          ($l (py-call (toolrunner.audit score agent (goal-text) (index-atom $s 1) (repr $s)))))
+         $s))
+
 ; a permanent API error (bad key, unknown model, ...) stops everything at once
 (= (fatal $r)
    (if (== (car-atom $r) error)
        (not (temporary-error (index-atom $r 1)))
        False))
 
+; turns used so far: the main agent's own plus those its helpers used
+; (a helper's own loop counts only its own turns)
+(= (turns-used $i)
+   (if (== (config-value agent-depth) 0) (+ $i (config-value helper-turns-used)) $i))
+
 (= (agent-loop $i)
-   (if (> $i (config-value max-iterations))
+   (if (> (turns-used $i) (config-value max-iterations))
        (stopped (iteration-limit (progress-report)))
        (if (>= (trailing-failures) (config-value max-failures-in-row))
            (stopped (no-progress (failed-in-a-row (trailing-failures))))
@@ -278,6 +325,8 @@
               ($s2 (show (result $out)))
               ($r (record-step $tool $input $out))
               ($w (add-atom &wm (step-task $k $task)))   ; which task this call worked on
+              ($tn (current-turn))                       ; bind first: add-atom does not evaluate
+              ($w2 (add-atom &wm (step-turn $k $tn)))    ; and in which turn (credit-turn-work)
               ($a (auto-note $tool $input $out)))
              ran)))
 
@@ -327,9 +376,38 @@
             no-work
             (if (is-member ok (unique-atom $work)) ok all-failed))))   ; is-member succeeds once PER occurrence
 
+; (task-done t1) for a task that is already completed: nothing to do, and it is
+; not shown again (models often repeat it: "● t1 done" printed twice).
 (= (mark-done $id)
+   (if (== (collapse (status-of $id)) (completed))
+       (ok already-completed)
+       (mark-done-open $id)))
+
+; In a batch every call is credited to the RUNNING task, e.g.
+;   (actions (action write-file ..) (action read-file ..) (task-done t1 t2))
+; puts both calls under t1, and t2 closed with no work at all — so a batch
+; whose calls all failed could still close it. A task closed with no successful
+; work of its own is credited with the calls of the turn that closes it; then the same
+; evidence rule applies (all failed → not done). A task closed in a turn that
+; ran nothing (pure reasoning, notes) still closes, as before.
+(= (credit-turn-work $id)
+   (let* (($t (current-turn))
+          ($ks (collapse (match &wm (step-turn $k $t) $k))))
+         (collapse (let $k (superpose $ks)
+                        (if (== (collapse (match &wm (step-task $k $id) yes)) ())
+                            (add-atom &wm (step-task $k $id))
+                            (empty))))))
+
+; no successful work yet (none, or all failed) → the closing turn's calls count too
+(= (evidence-for-closing $id)
+   (let $e (task-evidence $id)
+        (if (== $e ok)
+            ok
+            (let $c (credit-turn-work $id) (task-evidence $id)))))
+
+(= (mark-done-open $id)
    (let* (($out (if (task-exists $id)
-                    (if (== (task-evidence $id) all-failed)
+                    (if (== (evidence-for-closing $id) all-failed)
                         (error (no-evidence $id "every tool call for this task failed - a failed call is not completed work: fix it and run it again, or (task-failed ID \"why\")"))
                         (let $r (set-status $id completed) (ok completed)))
                     (error unknown-task)))
@@ -354,6 +432,9 @@
                        (if (== (task-evidence $id) all-failed)
                            (empty)                    ; stays open: verification says so
                            (let $r (set-status $id completed) $id))))))
+
+; Pending tasks require an explicit task-done proposal. Dependency completion
+; alone proves neither synthesis nor side effects such as saving a report.
 
 (= (reopen-tasks $ids)
    (collapse (let $id (superpose $ids) (set-status $id running))))
@@ -431,16 +512,48 @@
    (let* (($answer (index-atom $p 1))
           ($blocked (blocked-by-user $answer))
           ($b (if $blocked (block-open-tasks) ()))
-          ($closed (close-running-tasks))
+          ($running (close-running-tasks))
+          ($closed $running)
           ($problems (verify-answer $answer)))
          (if (== $problems ())
              (let $c (record-closed $closed) (if $blocked (blocked $answer) (done $answer)))
-             (if (>= (count-errors finish) (config-value max-final-rejections))
+             (if (>= (rejections-of (rejection-kind $problems)) (rejection-limit (rejection-kind $problems)))
                  (let $c (record-closed $closed) (done-unverified $answer))
-                 (let* (($o (reopen-tasks $closed))
+                 (let* (($o (reopen-tasks $running))
                         ($s (show (final-rejected $problems)))
                         ($r (record-step finish $answer (error (verification-failed $problems)))))
                        (continue $i))))))
+
+; A pending synthesis task is bookkeeping, not a failed factual answer. Give
+; the model its full verification retry budget after it fixes the plan status.
+; Each kind of rejection has its own budget of max-final-rejections:
+;   structural  open tasks (bookkeeping, not a wrong answer)
+;   checker     the semantic checker was unavailable (says nothing about the answer)
+;   content     the answer itself failed a check
+(= (rejection-kind $problems)
+   (let $h (car-atom $problems)
+        (if (is-expression $h)
+            (if (== (car-atom $h) unfinished)
+                structural
+                (if (== (car-atom $h) checker-unavailable) checker content))
+            content)))
+
+; "Tasks are still open" (structural) is not a wrong answer: the model finished
+; too early, and on a long plan it does so several times before the work is
+; done. Giving up after 2 of those ended a 6-task goal at turn 14 of 40 with 5
+; tasks untouched. Structural rejections get their own, larger budget; the
+; turn limit still bounds the run. Wrong answers keep max-final-rejections.
+(= (rejection-limit $kind)
+   (if (== $kind structural)
+       (config-value max-structural-rejections)
+       (config-value max-final-rejections)))
+
+(= (rejections-of $kind)
+   (size-atom (collapse (match &wm (step $n finish $a (error (verification-failed $p)))
+                               (if (== (rejection-kind $p) $kind) $n (empty))))))
+
+(= (structural-rejection $problems) (== (rejection-kind $problems) structural))
+(= (content-rejections) (rejections-of content))
 
 ; bad reply: tell the model (it sees the step next time), give up after a few
 (= (do-invalid $p $i)
@@ -473,6 +586,7 @@
 !(set-tool-option delegate retry no)
 !(set-tool-option delegate max-length 3000)
 !(set-tool-option delegate max-calls 6)
+!(set-tool-option delegate example "Read data/q1.csv and data/q2.csv and return the total of the revenue column of each")
 
 (= (restore-wm $atoms)
    (let* (($c (clear-wm))
@@ -488,22 +602,33 @@
           (cancelled (error "the helper was cancelled by the user"))
           ($other (error (helper-stopped (index-atom $r 1)))))))
 
-(= (run-helper $subgoal)
+; A helper's turns count toward the PARENT's max-iterations (helper-turns-used),
+; and a helper never gets more turns than the parent has left: without this,
+; 6 helpers of 20 turns could add 120 turns to a 40-turn goal unseen.
+(= (parent-turns-left)
+   (- (config-value max-iterations) (turns-used (current-turn))))
+
+(= (run-helper $subgoal $limit)
    (let* (($saved (collapse (get-atoms &wm)))
           ($turns (config-value max-iterations))
           ($d (set-config agent-depth 1))
-          ($t (set-config max-iterations (config-value sub-agent-turns)))
+          ($t (set-config max-iterations $limit))
           ($s1 (show (sub-agent-start $subgoal)))
           ($r (run-agent $subgoal))
+          ($used (current-turn))                  ; the HELPER's turns: read before restoring
           ($s2 (show (sub-agent-end (car-atom $r))))
           ($back (restore-wm $saved))
           ($d2 (set-config agent-depth 0))
-          ($t2 (set-config max-iterations $turns)))
+          ($t2 (set-config max-iterations $turns))
+          ($u (set-config helper-turns-used (+ (config-value helper-turns-used) $used))))
          (helper-outcome $r)))
 
 (= (metta-tool delegate $subgoal)
    (if (== (config-value agent-depth) 0)
-       (run-helper $subgoal)
+       (let $left (parent-turns-left)
+            (if (< $left 2)
+                (error "too few turns left for a helper: do this step yourself, or give the final answer")
+                (run-helper $subgoal (if (< $left (config-value sub-agent-turns)) $left (config-value sub-agent-turns)))))
        (error "a helper cannot start another helper: do this step yourself")))
 
 ; ================================================================ skills on demand
@@ -517,6 +642,7 @@
 !(set-tool-option read-skill max-length 200)
 !(set-tool-option read-skill max-output 13000)
 !(set-tool-option read-skill retry no)
+!(set-tool-option read-skill example "research")
 
 (= (attach-skill $s)
    (let $t (current-task)

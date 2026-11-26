@@ -35,9 +35,9 @@
 ; ---------------- calc proves the answer: no semantic LLM check ----------------
 !(use-script ("(plan (task t1 \"compute\" (uses math)))"
               "(action calc \"6 * 7\")"
-              "(final \"6 times 7 is 42\")"))          ; nothing left in the script for a verify call
+              "(final \"42\")"))          ; a bare expression and answer can be proven
 !(set-config verify-semantic on)
-!(test (run-agent "what is 6 times 7") (done "6 times 7 is 42"))
+!(test (run-agent "6 * 7") (done "42"))
 !(test (collapse (match &wm (verification $n semantic $r) $r)) (skipped-proven))
 !(set-config verify-semantic off)
 

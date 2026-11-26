@@ -131,7 +131,10 @@ def run_verifier(spec, goal, answer, observations, timeout=10):
 # retrying invalid input, a denied permission or a bad key can never help.
 TEMPORARY = re.compile(
     r"(?i)timeout|timed out|unavailable|temporar|rate.?limit|too many requests|"
-    r"\b429\b|\b50[0234]\b|connection (reset|refused|aborted)|network|try again|busy")
+    r"\b429\b|\b50[0234]\b|connection (reset|refused|aborted)|"
+    # not a bare "network": an off-topic search error that lists the title
+    # "Convolutional neural network" was retried as if the network were down
+    r"network (is )?(unavailable|unreachable|error|down)|try again|busy")
 
 
 def classify(text):

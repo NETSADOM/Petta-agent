@@ -88,13 +88,114 @@
 !(test (match &wm (verification 2 semantic $r) $r) pass)
 ; the checker saw the observations and the answer
 !(test (py-call (operator.contains (last-prompt) "I could only confirm the name: PARIS")) True)
-!(test (py-call (operator.contains (last-prompt) "(ok PARIS)")) True)
+!(test (py-call (operator.contains (last-prompt) "\"ok\", \"PARIS\"")) True)
 
-; an unreadable verdict is "unknown" → does not block (but is recorded)
-!(use-script ("(plan (task t1 \"t\"))" "(task-done t1)" "(final \"ok\")" "hmm, looks fine I guess"))
+; an unreadable verdict is asked for again AT ONCE: no rejection, no lost turn
+!(use-script ("(plan (task t1 \"t\"))" "(task-done t1)" "(final \"ok\")" "hmm, looks fine I guess"
+              "(verdict supported \"checked\")"))
 !(set-config verify-semantic on)
 !(test (run-agent "x") (done "ok"))
-!(test (match &wm (verification 1 semantic $r) $r) unknown)
+!(test (match &wm (verification 1 semantic $r) $r) pass)
+!(test (count-errors finish) 0)
+
+; a checker that stays unavailable rejects the final (never success), but in its
+; OWN budget: here the content budget (2) is still whole after it, so the
+; answer gets both of its content retries and then passes
+!(use-script ("(plan (task t1 \"t\"))" "(task-done t1)"
+              "(final \"a\")" "unparseable" "unparseable"
+              "(final \"b\")" "(verdict unsupported \"no\")"
+              "(final \"c\")" "(verdict unsupported \"no\")"
+              "(final \"d\")" "(verdict supported \"checked\")"))
+!(set-config verify-semantic on)
+!(test (run-agent "x") (done "d"))
+!(test (rejections-of checker) 1)
+!(test (content-rejections) 2)
+
+; repairing plan status does not consume the factual-answer rejection budget;
+; verification feedback remains visible after successful bookkeeping calls.
+; Explicitly close synthesis before asking the factual checker to judge it.
+!(use-script ("(plan (task t1 \"research\") (task t2 \"summarize\" (after t1)))"
+              "(action upper \"dropout\")" "(task-done t1)"
+              "(task-done t2)"
+              "(final \"unsupported one\")" "(verdict unsupported \"remove unsupported claims\")"
+              "(task-done t2)"
+              "(final \"unsupported two\")" "(verdict unsupported \"still unsupported\")"
+              "(final \"DROPOUT\")" "(verdict supported \"matches observed text\")"))
+!(set-config verify-semantic on)
+!(test (run-agent "research dropout and summarize it") (done "DROPOUT"))
+!(test (count-errors finish) 2)
+!(test (content-rejections) 2)
+!(test (py-call (operator.contains (act-request) "final-feedback")) True)
+!(test (py-call (operator.contains (act-request) "still unsupported")) True)
+
+; a plain-text summary after the format repair is only a final PROPOSAL;
+; unsupported prose is still rejected by the semantic checker.
+!(set-config repair-replies on)
+!(use-script ("(plan (task t1 \"summarize\"))" "(task-done t1)" ""
+              "Dropout disables selected activations during training. It helps reduce overfitting in neural networks. This extra claim has no supporting source."
+              "(verdict unsupported \"the extra claim is unsupported\")"
+              "(final \"Supported summary\")" "(verdict supported \"checked\")"))
+!(set-config verify-semantic on)
+!(test (run-agent "summarize dropout") (done "Supported summary"))
+!(test (count-errors finish) 1)
+!(set-config repair-replies off)
+
+; End-to-end: the checker sees a late source fact despite many bookkeeping
+; steps, and does not mistake an earlier rejected answer for source evidence.
+!(use-script ("(verdict supported \"the source contains the date\")"))
+!(set-config verify-semantic on)
+!(clear-wm)
+!(set-goal "check the observed date")
+!(let $source (py-call (fake_tools.late_fact 12000))
+       (record-step http-get "https://example.org/source" (ok $source)))
+!(collapse (let $n (superpose (1 2 3 4 5 6 7 8 9 10))
+                (record-step task-done $n (ok completed))))
+!(record-step finish "UNTRUSTED EARLIER DRAFT" (error unsupported))
+!(test (verify-answer "The source says in 2012.") ())
+!(test (py-call (operator.contains (last-prompt) "in 2012")) True)
+!(test (py-call (operator.contains (last-prompt) "UNTRUSTED EARLIER DRAFT")) False)
+!(test (count-errors finish) 1)
+
+ ; ---------------- dependencies do not complete pending work ----------------
+; Even after research succeeds, a pending save task must remain unfinished.
+!(use-script ("(plan (task t1 \"research\") (task t2 \"save report\" (after t1)))"
+              "(action upper \"dropout\")" "(task-done t1)"
+              "(final \"DROPOUT\")"))
+!(set-config verify-semantic off)
+!(set-config max-iterations 3)
+!(test (car-atom (run-agent "research and save report")) stopped)
+!(test (status-of t2) pending)
+!(set-config max-iterations 40)
+!(test (count-errors finish) 1)
+!(test (rejections-of structural) 1)
+; Synthesis can explicitly close in the same reply as its final answer.
+!(use-script ("(plan (task t1 \"research\") (task t2 \"summarize\" (after t1)))"
+              "(action upper \"dropout\")" "(task-done t1)"
+              "(actions (task-done t2) (final \"DROPOUT\"))"))
+!(test (run-agent "research dropout and summarize it") (done "DROPOUT"))
+!(test (count-errors finish) 0)
+!(test (status-of t2) completed)
+; no evidence behind it (t1 closed without any tool): t2 stays open → rejected
+!(use-script ("(plan (task t1 \"research\") (task t2 \"summarize\" (after t1)))"
+              "(task-done t1)" "(final \"from memory\")"
+              "(task-done t2)" "(final \"from memory\")"))
+!(test (run-agent "research and summarize") (done "from memory"))
+!(test (car-atom (index-atom (match &wm (step 2 finish $a $o) $o) 1))
+       verification-failed)
+; a task WITHOUT dependencies is never closed this way: answering before any
+; research is still rejected
+!(use-script ("(plan (task t1 \"what is dropout\"))"
+              "(final \"from memory\")"
+              "(action upper \"dropout\")" "(final \"DROPOUT\")"))
+!(test (run-agent "what is dropout") (done "DROPOUT"))
+!(test (count-errors finish) 1)
+
+; (task-done t1) twice: the second is a no-op, not shown or recorded again
+!(use-script ("(plan (task t1 \"t\"))" "(action upper \"x\")"
+              "(task-done t1)" "(task-done t1)" "(final \"X\")"))
+!(test (run-agent "x") (done "X"))
+!(test (size-atom (collapse (match &wm (step $n task-done t1 $o) $n))) 1)
+!(test (mark-done t1) (ok already-completed))
 
 ; semantic only runs if layers 1-2 pass (no wasted Gemini call)
 !(use-script ("(plan (task t1 \"a\") (task t2 \"b\"))" "(task-done t1)"
@@ -112,3 +213,19 @@
 !(set-config verify-semantic on)
 !(test (run-agent "x") (done-unverified "c"))
 !(test (episode-confidence (done-unverified "c")) 0)   ; not verified = not kept
+
+; an unreachable checker also blocks; exhausting retries is visibly incomplete
+; (each final asks the checker twice: the first try and the immediate retry)
+!(use-script ("(plan (task t1 \"t\"))" "(task-done t1)"
+              "(final \"a\")" "unparseable" "unparseable"
+              "(final \"b\")" "unparseable" "unparseable"
+              "(final \"c\")" "unparseable" "unparseable"))
+!(set-config verify-semantic on)
+!(test (run-agent "x") (done-unverified "c"))
+!(test (count-errors finish) 2)
+!(use-script ())
+!(set-config verify-semantic on)
+!(clear-wm)
+!(set-goal "check with an unavailable model")
+!(test (car-atom (car-atom (verify-answer "draft"))) checker-unavailable)
+!(test (match &wm (verification 1 semantic $r) $r) unknown)

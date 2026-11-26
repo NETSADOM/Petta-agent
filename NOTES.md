@@ -18,11 +18,17 @@ timeout, retry of temporary errors. The result becomes `(step N TOOL INPUT OUTCO
 Otherwise the model plans 1-3 tasks; a plan with a self-dependency or a cycle is
 sent back once to be corrected.
 
-**Done means proven.** A task whose calls all failed cannot be marked done. A
+**Completion.** Pending tasks never close merely because their dependencies finished;
+answer-only tasks require an explicit `task-done` proposal before verification.
+ A task whose calls all failed cannot be marked done. A
 final answer needs every task resolved and passes three checks: symbolic rules,
 Python verifiers (numbers must appear in observations; a file the answer says
-was saved must exist), then an LLM judge, skipped when calc already proves the
-answer. Rejected twice → `done-unverified`, shown and treated as **incomplete**.
+was saved must exist), then an LLM judge. Its failure or invalid verdict rejects
+completion. Only a bare arithmetic goal and numeric answer with a matching calc
+result and recalculation skip the judge. An answer judged wrong twice →
+`done-unverified`, shown and treated as **incomplete**. A final refused only
+because tasks are still open has its own budget (5): on a long plan the model
+often tries to finish early, and it is told to close done tasks and go on.
 
 **Asking, not guessing.** Missing information → `ask-user`. No answer → a
 `blocker` note; an answer that fills the value in anyway is rejected, and the
@@ -42,10 +48,12 @@ recovery fixes) passes the same sensitivity, size and pruning gates.
 
 **Evidence.** `sh tests/run_tests.sh`: 670+ checks with a scripted model (loop
 mechanics, safety, evidence rules). Real model: `scripts/record_logs.sh` runs
-three unseen goals in one session with `gpt-oss-120b`; the transcript is in
-`logs/` (see README, "Logs").
+three goals in one session (Groq `gpt-oss-120b`, with fallbacks). Two sessions
+in `logs/` hold the three verified tasks; the to-do app took 40 turns, 48 steps,
+with 15 failed steps it recovered from (README, "Logs of completed tasks").
 
 **Limits.** Retrieval and skill matching use word overlap. The sensitivity
 filter is pattern-based. A hung Python tool is abandoned, not killed. The LLM
 judge can be fooled. Quality of long runs depends on the model, and free-tier
-token limits (Groq: 200 000 per day) cap how much can run.
+token limits (Groq: 8 000 per minute, 200 000 per day) cap how much can run;
+`OPENAI_FALLBACK_MODELS` switches model when a daily quota runs out.

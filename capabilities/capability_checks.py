@@ -31,15 +31,24 @@ def number_is_observed(goal, answer, observations):
 
 
 # (N calc "expr" (ok VALUE)) in the observations → VALUE
-CALC_RESULT = re.compile(r'\(\d+ calc "(?:[^"\\]|\\.)*" \(ok "?(-?\d+(?:\.\d+)?)')
+CALC_RESULT = re.compile(r'\(\d+ calc "(?:[^"\\]|\\.)*" \(ok "?(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)"?\s*\)')
 
 
 def answer_is_tool_result(goal, answer, observations):
-    """CONCLUSIVE check for math: the answer states a number that calc returned.
-    Then a second LLM call asking "is this supported?" adds nothing."""
-    results = {float(v) for v in CALC_RESULT.findall(str(observations))}
-    said = {float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", str(answer).replace(",", ""))}
-    return bool(results & said)
+    """Only prove a bare arithmetic expression with a bare numeric answer.
+
+    Word problems and compound answers require semantic verification: a shared
+    number cannot prove that every requested part of a goal was completed.
+    """
+    import agent_tools
+    expression, reply = str(goal).strip(), str(answer).strip()
+    if not re.fullmatch(r"[0-9\s.+*/%()^\-]+", expression):
+        return False
+    if not re.fullmatch(r"-?\d+(?:\.\d+)?", reply):
+        return False
+    result = agent_tools.calc(expression)
+    results = CALC_RESULT.findall(str(observations))
+    return (result[0] == "ok" and result[1] == reply and reply in results)
 
 
 # "saved the summary to report.md", "wrote notes/a.txt", "created out.csv"

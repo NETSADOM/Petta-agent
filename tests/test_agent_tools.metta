@@ -106,7 +106,7 @@
 
 ; ---------------- ask-user ----------------
 !(test (repr (execute ask-user "favourite colour?")) "(ok green)")
-!(test (repr (execute ask-user "anything else?")) "(ok (the user pressed Enter without typing an answer))")
+!(test (car-atom (execute ask-user "anything else?")) error)
 
 ; ---------------- the shared runner never crashes ----------------
 !(declare-tool quitter "calls sys.exit" safe fake_tools.exits)

@@ -100,7 +100,20 @@ def wiki_search(query):
         hits = found.get("query", {}).get("search", [])
         if not hits:
             return ["error", f"no Wikipedia results for: {q}"]
-        top = hits[0]["title"]
+        # Search rank alone is not evidence of relevance ("Dropout (machine
+        # learning)" can rank a Transformer article first).
+        generic = {"the", "a", "an", "of", "in", "for", "and", "what", "is",
+                   "machine", "learning", "algorithm", "deep", "area"}
+        terms = set(re.findall(r"\w+", q.lower())) - generic
+        def relevance(hit):
+            title = set(re.findall(r"\w+", hit.get("title", "").lower()))
+            return len(terms & title)
+        best = max(hits, key=relevance)
+        if terms and relevance(best) == 0:
+            titles = "; ".join(h.get("title", "") for h in hits)
+            return ["error", f"Wikipedia returned off-topic titles for {q}: {titles}. "
+                    "Try web-search or a more specific article title; research is not complete."]
+        top = best["title"]
         summary = _get_json("https://en.wikipedia.org/api/rest_v1/page/summary/" +
                             urllib.parse.quote(top.replace(" ", "_")))
     except urllib.error.HTTPError as e:
@@ -108,7 +121,7 @@ def wiki_search(query):
                 else f"wikipedia HTTP {e.code}"]
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         return ["error", f"network unavailable: {e}"]
-    others = "; ".join(h["title"] for h in hits[1:])
+    others = "; ".join(h["title"] for h in hits if h["title"] != top)
     text = f"{top}: {summary.get('extract', '').strip()}"
     if others:
         text += f"  (other matches: {others})"
@@ -472,6 +485,34 @@ _GIT_LIST_OPERAND = {"--list", "-l", "--contains", "--no-contains", "--merged", 
                      "--points-at"}                 # options after which a name is a pattern/commit
 _GIT_GLOBAL_OK = {"--no-pager", "-P"}              # NOT -c (sets config: can run a program)
 
+# GNU programs accept abbreviated long options. Only exact, reviewed names
+# may bypass approval; checking prefixes of dangerous names misses --out etc.
+_READ_LONG_OPTIONS = {
+    "sort": {"--reverse", "--numeric-sort", "--general-numeric-sort", "--human-numeric-sort",
+             "--unique", "--check", "--key", "--field-separator", "--stable"},
+    "tree": {"--dirsfirst", "--noreport", "--filelimit"},
+    "file": {"--brief", "--mime", "--mime-type", "--mime-encoding", "--dereference"},
+    "rg": {"--line-number", "--ignore-case", "--fixed-strings", "--files", "--hidden",
+           "--glob", "--type", "--count", "--files-with-matches", "--no-heading", "--color"},
+    "date": {"--utc", "--universal", "--iso-8601", "--rfc-3339", "--date"},
+    "git": {"--no-pager", "--oneline", "--stat", "--shortstat", "--name-only", "--name-status",
+            "--short", "--porcelain", "--format", "--pretty", "--max-count", "--since", "--until",
+            "--author", "--all", "--no-ext-diff", "--no-textconv", "--no-color",
+            "--cached", "--staged", "--no-index", "--abbrev-ref", "--show-toplevel",
+            "--show-current", "--list", "--remotes", "--verbose", "--merged", "--no-merged",
+            "--contains", "--no-contains", "--points-at", "--sort", "--color", "--no-column"},
+}
+
+
+def _known_long_options(cmd, args):
+    allowed = _READ_LONG_OPTIONS.get(cmd, {"--help", "--version"})
+    for arg in args:
+        if arg == "--":
+            continue  # it might be another option's operand (e.g. git -C --)
+        if arg.startswith("--") and arg.split("=", 1)[0] not in allowed:
+            return False
+    return True
+
 
 def _split_options(args):
     """→ (options, operands); everything after -- is an operand."""
@@ -526,6 +567,8 @@ def _segment_is_read_only(words):
     cmd, args = words[0], words[1:]
     if "/" in cmd or "=" in cmd:
         return False                                   # ./script, FOO=1 cmd
+    if not _known_long_options(cmd, args):
+        return False
     if cmd in _PLAIN_READ:
         return True
     opts, operands = _split_options(args)

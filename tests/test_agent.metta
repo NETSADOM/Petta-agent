@@ -78,14 +78,15 @@
 !(test (step-count) 3)
 !(set-config max-iterations 40)
 
-; ===== 5. "final" with open tasks is rejected; twice → done-unverified =====
+; ===== 5. "final" with open tasks is rejected; after max-structural-rejections (5) → done-unverified =====
 !(use-script ("(plan (task t1 \"a\") (task t2 \"b\"))"
               "(final \"too early\")"
               "(task-done t1)"
               "(final \"still early\")"
+              "(final \"early 3\")" "(final \"early 4\")" "(final \"early 5\")"
               "(final \"give up waiting\")"))
 !(test (run-agent "x") (done-unverified "give up waiting"))
-!(test (count-errors finish) 2)
+!(test (count-errors finish) 5)   ; max-structural-rejections
 !(test (match &wm (step 1 finish $a (error (verification-failed (($u $open $why $hints))))) ($u $open $hints))
        (unfinished (t1 t2) ((t1 (run-first ())) (t2 (run-first ())))))
 
@@ -115,6 +116,31 @@
 !(test (run-agent "abc") (done "all done"))
 !(test (collapse (match &wm (step $n task-done $id (ok completed)) $id)) (t1 t2 t3))
 !(test (check-proposal (task-done t1 "t2")) (invalid bad-shape))
+
+; ===== 5b. a batch credits its calls to EVERY task it closes =====
+; t2 never ran a call of its own (the batch's calls go to the running task t1):
+; it gets the calls of the closing turn. All failed → t2 is not done either.
+!(use-script ("(plan (task t1 \"a\") (task t2 \"b\"))"
+              "(actions (action flaky \"x\") (task-done t1 t2))"
+              "(actions (action upper \"y\") (task-done t1 t2))"
+              "(final \"Y\")"))
+!(test (run-agent "ab") (done "Y"))
+!(test (collapse (match &wm (step $n task-done t2 (error (no-evidence t2 $why))) $n)) (3))
+!(test (collapse (match &wm (step $n task-done t2 (ok completed)) $n)) (6))
+; a task closed in a turn that ran NO call (pure reasoning) still closes
+!(use-script ("(plan (task t1 \"think\"))" "(task-done t1)" "(final \"thought\")"))
+!(test (run-agent "think") (done "thought"))
+
+; ===== 5c. the run score: REPORT ONLY, the outcome dominates =====
+; (2 turns, nothing wasted: 60 + 40 - 1 for the second turn)
+!(test (index-atom (run-score (done "thought") 0) 1) 99)
+!(test (index-atom (run-score (blocked "x") 0) 1) 40)
+!(test (index-atom (run-score (done-unverified "x") 0) 1) 20)
+!(test (index-atom (run-score (stopped too-many-invalid-replies) 0) 1) 0)
+; wasted LLM calls lower a done run's score, but never below 60
+; (9 calls for 2 turns: 5 beyond the expected 2 + 2 → 60 + 40 - 1 - 5)
+!(test (index-atom (run-score (done "thought") 9) 1) 94)
+!(test (index-atom (run-score (done "thought") 500) 1) 60)
 
 ; ===== 6. needs-approval tool, user says "n" → denied, tool NOT run =====
 !(use-script ("(plan (task t1 \"save\"))"
@@ -175,6 +201,11 @@
 ; still unusable after the repair: counted as before, 3 in a row stop the run
 !(use-script ("(plan (task t1 \"t\"))" "lol" "lol" "lol" "lol" "lol" "lol" "(final \"x\")"))
 !(test (run-agent "x") (stopped too-many-invalid-replies))
+; an EMPTY reply is repaired in the same turn: no step, no lost turn
+!(use-script ("(plan (task t1 \"t\"))" "(task-done t1)" "" "(final \"after-empty\")"))
+!(test (run-agent "x") (done "after-empty"))
+!(test (collapse (match &wm (step $n gemini $i $o) $n)) ())
+!(test (let $p (last-prompt) (py-call (.__contains__ $p "WAS EMPTY"))) True)
 ; a wrong shape is asked for again too
 !(use-script ("(plan (task t1 \"t\"))" "(task-done t1)" "(action)" "(final \"reshaped\")"))
 !(test (run-agent "x") (done "reshaped"))

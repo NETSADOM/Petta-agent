@@ -25,6 +25,16 @@
 ; several calls in one reply
 !(test (check-proposal (actions (action calc "1") (action rm-rf "/"))) (actions (action calc "1") (action rm-rf "/")))
 !(test (check-proposal (actions (final "x") (final "y"))) (actions (final "x") (final "y")))   ; the first final ends the batch (agent.metta)
+; write-file with path and content as TWO strings becomes the JSON input (one escaping level)
+!(test (check-proposal (action write-file "a.md" "two words")) (action write-file "{\"path\": \"a.md\", \"content\": \"two words\"}"))
+!(test (check-proposal (parse-reply "(action write-file \"a.md\" \"say \\\"hi\\\"\")"))
+       (action write-file "{\"path\": \"a.md\", \"content\": \"say \\\"hi\\\"\"}"))
+; ... also inside a batch
+!(test (check-proposal (actions (action write-file "b.md" "x") (final "saved b.md")))
+       (actions (action write-file "{\"path\": \"b.md\", \"content\": \"x\"}") (final "saved b.md")))
+; the JSON form still works, and other tools still take ONE input
+!(test (check-proposal (action write-file "{\"path\": \"c.md\", \"content\": \"y\"}")) (action write-file "{\"path\": \"c.md\", \"content\": \"y\"}"))
+!(test (check-proposal (action calc "1" "2")) (invalid bad-shape))
 !(test (check-proposal (actions)) (invalid bad-shape))
 !(test (parse-reply "(action calc \"1+1\")\n(action calc \"2+2\")") (actions (action calc "1+1") (action calc "2+2")))
 !(test (parse-reply "(actions (action calc \"1\") (action now \"\"))") (actions (action calc "1") (action now "")))
@@ -94,6 +104,16 @@
 !(test (py-call (operator.contains (act-request) "only task")) True)
 ; untrusted data is fenced off from instructions
 !(test (py-call (operator.contains (act-request) "<data name=\"goal\">")) True)
+; every tool is a readable line; one with an example also shows an EXACT call to copy
+!(add-atom &caps (tool-setting calc example "2480*0.15"))
+!(test (py-call (operator.contains (act-request) "- web-search [safe]: search the web")) True)
+!(test (py-call (operator.contains (act-request) "call: (action calc \"2480*0.15\")")) True)
+!(test (py-call (operator.contains (plan-request) "call: (action calc \"2480*0.15\")")) True)
+; the current task's skill tools are named inside the CURRENT TASK block
+!(add-atom &caps (skill-needs offline-math calc))
+!(add-atom &wm (task-skill t1 offline-math))
+!(test (task-tool-rows t1) ((calc "evaluate arithmetic" safe "2480*0.15")))
+!(remove-atom &wm (task-skill t1 offline-math))
 
 ; ---------------- no API key → permanent config error, no crash ----------------
 !(test (car-atom (ask-llm "sys" "hi")) error)

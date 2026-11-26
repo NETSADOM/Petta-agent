@@ -22,8 +22,16 @@
 !(test (py-call (fake_tools.shell_rules_ok)) True)
 !(test (py-call (agent_tools.shell_is_read_only "git diff --output=file")) False)
 !(test (py-call (agent_tools.shell_is_read_only "git branch --delete=name")) False)
+!(test (py-call (agent_tools.shell_is_read_only "sort --out=result.txt input.txt")) False)
+!(test (py-call (agent_tools.shell_is_read_only "git diff --out=result.patch")) False)
 
 ; ---------------- 2. multiline content is preserved ----------------
+; malformed JSON plans are ordinary invalid replies and can be corrected
+!(test (parse-reply "{\"plan\":[null]}") (invalid no-expression))
+!(test (parse-reply "{\"plan\":[1]}") (invalid no-expression))
+!(use-script ("{\"plan\":[null]}" "(plan (task t1 \"shout\"))"
+              "(action upper \"ok\")" "(final \"OK\")"))
+!(test (run-agent "shout ok") (done "OK"))
 !(test (py-call (fake_tools.is_multiline (index-atom (parse-reply (py-call (fake_tools.multiline_json_reply))) 2))) True)
 ; raw newlines inside a JSON string (invalid strict JSON, common in model replies)
 !(test (py-call (fake_tools.is_two_lines (index-atom (parse-reply (py-call (fake_tools.multiline_raw_json_reply))) 2))) True)
@@ -67,9 +75,8 @@
 ; a final answer does not close a task whose calls all failed
 !(use-script ("(plan (task t1 \"fetch\"))"
               "(action always-fails \"x\")"
-              "(final \"fetched it\")"
-              "(final \"fetched it\")"
-              "(final \"fetched it\")"))
+              "(final \"fetched it\")" "(final \"fetched it\")" "(final \"fetched it\")"
+              "(final \"fetched it\")" "(final \"fetched it\")" "(final \"fetched it\")"))
 !(test (run-agent "fetch again") (done-unverified "fetched it"))
 !(test (collapse (status-of t1)) (running))
 ; claimed files must exist
@@ -79,6 +86,11 @@
 !(test (car-atom (helper-outcome (done-unverified "draft"))) error)
 
 ; ---------------- 5. no guessing when the user does not answer ----------------
+!(clear-wm)
+!(record-step ask-user "which file?" (error "blank response"))
+!(test (unanswered-questions) ("which file?"))
+!(record-step ask-user "which file?" (ok "sales.csv"))
+!(test (unanswered-questions) ())
 !(use-script ("(plan (task t1 \"name the file\"))"
               "(ask-user \"which file should I use?\")"
               "(final \"I used data.csv\")"                                 ; a guess: rejected

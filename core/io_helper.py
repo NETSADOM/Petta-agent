@@ -80,8 +80,24 @@ def confirm_remembered(question, tool, tool_input):
     return False
 
 
+def discard_typeahead():
+    """Drop keys typed while the agent was working but never sent with Enter.
+    They stay in the terminal's buffer and would be glued to the next goal:
+    "cle" + "what is dropout" became the goal "clewhat is dropout".
+    Only on a real POSIX terminal: piped input (tests, drive_session) is kept."""
+    try:
+        if os.name == "posix" and sys.stdin.isatty():
+            import termios
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+            return True
+    except (ImportError, OSError, ValueError):
+        pass
+    return False
+
+
 def read_goal():
     """Next goal from the user; EOF counts as quit."""
+    discard_typeahead()
     try:
         goal = input("\nyou> ").strip() or "quit"
     except (EOFError, KeyboardInterrupt):
@@ -157,7 +173,7 @@ def ask_user(question, timeout=None):
         _audit("ask", "ask-user", q, "ok", answer)
         _log(prompt + " >", answer)
         if not answer:
-            return ["ok", "(the user pressed Enter without typing an answer)"]
+            return ["error", "the user did not answer: blank response. Ask again or report what is blocked; do not guess."]
         return ["ok", answer]
     except BaseException as e:                   # Ctrl+C at the prompt included
         print("", flush=True)

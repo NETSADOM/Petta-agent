@@ -7,6 +7,8 @@ Config (environment variables):
     OPENAI_BASE_URL   default https://api.openai.com/v1
     OPENAI_API_KEY    required, except for local servers (localhost / 127.0.0.1)
     OPENAI_MODEL      required — model names differ per provider, so no guess
+    OPENAI_FALLBACK_MODELS  optional, comma-separated: used in order when the
+                      current model's DAILY quota runs out (or it does not exist)
     PAGENT_TIMEOUT    seconds, default 60
     PAGENT_RATE_WAIT  max seconds to wait when a rate limit says "try again in Xs" (default 60)
 
@@ -29,8 +31,48 @@ def base_url():
     return os.environ.get("OPENAI_BASE_URL", DEFAULT_BASE).rstrip("/")
 
 
+def models():
+    """OPENAI_MODEL first, then OPENAI_FALLBACK_MODELS (comma-separated), no repeats."""
+    names = [os.environ.get("OPENAI_MODEL", "").strip()]
+    names += [m.strip() for m in os.environ.get("OPENAI_FALLBACK_MODELS", "").split(",")]
+    out = []
+    for m in names:
+        if m and m not in out:
+            out.append(m)
+    return out
+
+
+# models whose DAILY quota ran out (or that do not exist) in this session
+EXHAUSTED = set()
+
+
 def model():
-    return os.environ.get("OPENAI_MODEL", "").strip()
+    """The model to use now: the first one in models() not yet exhausted."""
+    names = models()
+    for m in names:
+        if m not in EXHAUSTED:
+            return m
+    return names[0] if names else ""
+
+
+def switch_model(reason):
+    """Mark the current model as used up; True when another one is left."""
+    current = model()
+    EXHAUSTED.add(current)
+    nxt = model()
+    if nxt in EXHAUSTED or nxt == current:
+        return False
+    try:
+        import toolrunner
+        toolrunner.audit("model-switch", "llm", current, nxt, _short(reason))
+    except Exception:
+        pass
+    try:
+        import sys
+        print(f"  · {current}: {_short(reason, 120)} → switching to {nxt}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
+    return True
 
 
 def _key():
@@ -103,8 +145,12 @@ def failed_generation(code, text):
     """Groq answers 400 tool_use_failed when a model (gpt-oss) replies in its native
     tool-call format, which this client does not use. The reply itself is in
     failed_generation: it is the model's answer, so it is used as the reply text
-    (reply_parser turns {"name": ..., "arguments": ...} into an action)."""
-    if code != 400 or "tool_use_failed" not in str(text):
+    (reply_parser turns {"name": ..., "arguments": ...} into an action).
+    Groq's 400 output_parse_failed ("Parsing failed. The model generated output
+    that could not be parsed") is the same situation: the model's text is in
+    failed_generation. Used as the reply, it goes through the normal format
+    repair instead of stopping the goal as a fatal bad request."""
+    if code != 400 or not any(c in str(text) for c in ("tool_use_failed", "output_parse_failed")):
         return ""
     try:
         err = json.loads(text).get("error") or {}
@@ -131,32 +177,126 @@ def _pretty_wait(secs):
 
 
 def generate(system, prompt):
+    """One chat completion (see _generate); afterwards decides whether the NEXT
+    call escalates reasoning effort (see ESCALATE)."""
+    try:
+        r = _generate(system, prompt)
+    finally:
+        ESCALATE["next"] = False
+    ESCALATE["next"] = (list(r) == ["ok", ""] and bool(LAST_EMPTY["reasoning"].strip()))
+    return r
+
+
+def _generate(system, prompt):
     """One chat completion; waits out short rate limits (see module doc).
 
-    An EMPTY reply (thinking models such as gpt-oss sometimes spend the whole
-    answer on hidden reasoning) is asked again once. If it stays empty it comes
+    An EMPTY reply with no reasoning (the model ran out of tokens) is asked again
+    once; one WITH reasoning is returned at once (see below). If it stays empty it comes
     back as ["ok", ""]: the agent then records an invalid reply, which the model
     sees next turn, instead of stopping the run as if it were a fatal error."""
     limit = float(os.environ.get("PAGENT_RATE_WAIT", "60"))
+    LAST_EMPTY["reasoning"] = ""      # only an empty reply of THIS call sets it
+    LAST_EMPTY["cut"] = False
     empties = 0
     for _ in range(5):
         r = _generate_once(system, prompt)
         if r[0] == "error" and r[1] == "empty":
             empties += 1
-            if empties >= 2:
+            # With reasoning, the model DECIDED and wrote nothing: the same
+            # prompt again comes back empty too (every time in the logs). The
+            # callers retry with a better prompt instead: the act repair shows
+            # the reasoning, the plan retry, and the checker is asked again.
+            if empties >= 2 or LAST_EMPTY["reasoning"].strip():
                 return ["ok", ""]
+            continue
+        if r[0] == "error" and r[1] == "model-not-found" and switch_model(r[2]):
             continue
         if r[0] == "ok" or r[1] != "rate-limit" or len(r) < 4:
             return r[:3]
         wait = r[3]
         if wait is None:
             return r[:3]
-        if wait > limit:              # a daily / long limit: stop now, say when to come back
-            return ["error", "quota", f"{name_of_limit(r[2])} reached at {base_url()}: try again in "
+        if wait > limit:              # a daily / long limit: next model, or stop and say when to come back
+            if switch_model(r[2]):
+                continue
+            return ["error", "quota",f"{name_of_limit(r[2])} reached at {base_url()}: try again in "
                     f"{_pretty_wait(wait)}, or use another API key or model (OPENAI_MODEL in .env). "
                     f"Provider said: {_short(r[2])}"]
         time.sleep(wait + 0.5)
     return r[:3] if r[0] == "ok" or r[1] != "empty" else ["ok", ""]
+
+
+LAST_EMPTY = {"reasoning": "", "cut": False}
+
+
+def last_cut(_=None):
+    """True when the latest reply stopped at the token limit (finish_reason
+    "length"): a long write-file then never reaches its closing quote, and the
+    format repair must say "shorter", not repeat the format."""
+    return LAST_EMPTY["cut"]
+
+
+def last_reasoning(_=None):
+    """The hidden reasoning of the latest call if its reply was EMPTY, else "".
+    The format repair (core/llm.metta repair-reply) shows it to the model: it
+    usually already names the step ("Use calc tool.") it then failed to write."""
+    return LAST_EMPTY["reasoning"]
+
+
+def _audit_empty(name, reason, message, usage, prompt_chars):
+    """Why was the reply empty? Written to data/audit.jsonl (event empty-reply):
+    finish reason, token counts, and the start and end of the hidden reasoning,
+    so an empty reply can be diagnosed instead of only retried."""
+    reasoning = str(message.get("reasoning") or message.get("reasoning_content") or "")
+    LAST_EMPTY["reasoning"] = reasoning
+    detail = {"model": name, "finish_reason": reason, "prompt_chars": prompt_chars,
+              "prompt_tokens": usage.get("prompt_tokens"),
+              "completion_tokens": usage.get("completion_tokens"),
+              "reasoning_chars": len(reasoning),
+              "message_keys": sorted(message.keys()),
+              # last: audit() keeps 500 characters of detail
+              "reasoning_tail": reasoning[-150:], "reasoning_head": reasoning[:100]}
+    try:
+        import toolrunner
+        toolrunner.audit("empty-reply", "llm", "", "empty", json.dumps(detail, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def reasoning_effort(name):
+    """gpt-oss spends its output on hidden reasoning first; with the default
+    effort it often runs out before writing any answer (an EMPTY reply, a lost
+    turn). Our replies are one short S-expression, so "low" is enough.
+    PAGENT_REASONING_EFFORT overrides it (low|medium|high); "off" sends nothing.
+    Only for gpt-oss: other models may reject the field."""
+    if "gpt-oss" not in str(name).lower():
+        return None
+    effort = os.environ.get("PAGENT_REASONING_EFFORT", "low").strip().lower()
+    if effort in ("", "off", "none"):
+        return None
+    if ESCALATE["next"] and effort == "low":
+        return "medium"
+    return effort
+
+
+# After an EMPTY reply that HAD reasoning ("Need list files." and nothing else),
+# the very next call (the format repair) runs with medium effort: at low effort
+# gpt-oss often stops right after naming the step, and asked again the same way
+# it does it again (three in a row ended a run). One call only, then back to low.
+ESCALATE = {"next": False}
+
+
+def request_body(name, system, prompt):
+    body = {
+        "model": name,
+        "messages": [{"role": "system", "content": str(system)},   # our instructions
+                     {"role": "user", "content": str(prompt)}],    # task data
+        "temperature": 0.2,
+    }
+    effort = reasoning_effort(name)
+    if effort:
+        body["reasoning_effort"] = effort
+    return body
 
 
 def _generate_once(system, prompt):
@@ -165,12 +305,7 @@ def _generate_once(system, prompt):
         return ["error", "config", "OPENAI_MODEL is not set (e.g. gpt-4o-mini, llama3.1, ...)"]
     if not key and not _is_local(url):
         return ["error", "config", "OPENAI_API_KEY is not set"]
-    body = json.dumps({
-        "model": name,
-        "messages": [{"role": "system", "content": str(system)},   # our instructions
-                     {"role": "user", "content": str(prompt)}],    # task data
-        "temperature": 0.2,
-    }).encode("utf-8")
+    body = json.dumps(request_body(name, system, prompt)).encode("utf-8")
     # an explicit User-Agent: some providers (Groq, behind Cloudflare) refuse
     # urllib's default one with HTTP 403 "error code: 1010"
     headers = {"Content-Type": "application/json", "User-Agent": "P-agent/0.1 (urllib)"}
@@ -203,7 +338,9 @@ def _generate_once(system, prompt):
     text = (message.get("content") or "").strip() or _tool_calls_as_text(message)
     if not text:
         reason = choices[0].get("finish_reason")
+        _audit_empty(name, reason, message, data.get("usage") or {}, len(str(prompt)))
         if reason == "content_filter":                       # a real safety block
             return ["error", "blocked", "empty reply (content_filter)"]
         return ["error", "empty", f"empty reply ({reason})"]  # see generate()
+    LAST_EMPTY["cut"] = choices[0].get("finish_reason") == "length"
     return ["ok", text]

@@ -6,35 +6,43 @@
 
 ; ============================================================ tools (Python)
 !(declare-tool calc "evaluate arithmetic exactly, e.g. (17*23)+(144/12) or 2480*0.15. Use it for ANY calculation instead of computing in your head." safe agent_tools.calc)
+!(set-tool-option calc example "2480*0.15")
 !(set-tool-option calc pattern "[0-9+*/().%^, eE-]+")
 !(set-tool-option calc max-length 300)
 
-!(declare-tool wiki-search "search Wikipedia; input is a short query like 'Lake Tana area'. Returns the best article's summary." safe agent_tools.wiki_search)
+!(declare-tool wiki-search "search Wikipedia for ENCYCLOPEDIC facts (people, places, history, science, definitions); input is a short query like 'Lake Tana area'. Returns the best article's summary." safe agent_tools.wiki_search)
+!(set-tool-option wiki-search example "Lake Tana")
 !(set-tool-option wiki-search max-length 200)
 !(set-tool-option wiki-search timeout 25)
 !(set-tool-option wiki-search retries 1)
 
-!(declare-tool web-search "search the web (DuckDuckGo); input is a short query. Returns the top results: title, url and snippet. Use http-get on a url to read the page." safe agent_tools.web_search)
+!(declare-tool web-search "search the web (DuckDuckGo) for CURRENT or specific facts (news, prices, versions, recent events, products); input is a short query. Returns the top results: title, url and snippet. Use http-get on a url to read the page." safe agent_tools.web_search)
+!(set-tool-option web-search example "Python 3.13 release date")
 !(set-tool-option web-search max-length 300)
 !(set-tool-option web-search timeout 25)
 !(set-tool-option web-search retries 1)
 
-!(declare-tool list-files "list the files in the workspace folder (input: anything)" safe agent_tools.list_files)
+!(declare-tool list-files "list the files in the workspace folder. Use it first when a file name is unknown or unclear (input: anything)" safe agent_tools.list_files)
+!(set-tool-option list-files example ".")
 !(set-tool-option list-files allow-empty yes)
-!(declare-tool read-file "read a text file from the workspace; input is its relative path, e.g. data/sales.csv" safe agent_tools.read_file)
+!(declare-tool read-file "read a text file from the workspace; input is its relative path, e.g. notes.txt or src/main.py (use list-files first if unsure)" safe agent_tools.read_file)
+!(set-tool-option read-file example "notes.txt")
 !(set-tool-option read-file max-length 300)
 !(set-tool-option read-file max-output 20000)
 
-!(declare-tool write-file "write a text file in the workspace; input is JSON {\"path\": \"notes/out.txt\", \"content\": \"...\"}" needs-approval agent_tools.write_file)
+!(declare-tool write-file "write a text file in the workspace: path and content as TWO strings (shown below; \\n for a new line). JSON {\"path\": ..., \"content\": ...} also works." needs-approval agent_tools.write_file)
+!(set-tool-option write-file example "(action write-file \"notes/out.txt\" \"line 1\\nline 2\")")
 !(set-tool-option write-file max-length 100000)
 !(set-tool-option write-file auto-approve agent_tools.write_is_new_file)   ; asks only to OVERWRITE
 
 !(declare-tool run-python "run a short Python 3 program and return what it prints; use print(). Separate process, runs in the workspace folder (open files by their workspace path), 15s limit, no third-party packages." needs-approval agent_tools.run_python)
+!(set-tool-option run-python example "print(sum(range(1, 11)))")
 !(set-tool-option run-python timeout 25)
 !(set-tool-option run-python max-length 20000)
 !(set-tool-option run-python max-output 8000)
 
 !(declare-tool run-shell "run a shell command (sh) in the workspace folder and return its exit code, stdout and stderr, e.g. ls -la or grep -n TODO notes.txt. Non-interactive (no stdin), 60s limit. Read-only commands run at once; anything that may change or delete something waits for the user's approval." needs-approval agent_tools.run_shell)
+!(set-tool-option run-shell example "grep -n TODO notes.txt")
 !(set-tool-option run-shell auto-approve agent_tools.shell_is_read_only)   ; asks for anything else
 !(set-tool-option run-shell max-length 4000)
 !(set-tool-option run-shell max-output 16000)
@@ -42,6 +50,7 @@
 !(set-tool-option run-shell retry no)       ; a command with side effects must not run twice
 
 !(declare-tool http-get "GET a public http(s) URL; a web page comes back as its readable text. Binary files (PDF) are refused." needs-approval agent_tools.http_get)
+!(set-tool-option http-get example "https://en.wikipedia.org/wiki/Lake_Tana")
 !(set-tool-option http-get pattern "https?://\\S+")
 !(set-tool-option http-get timeout 20)
 !(set-tool-option http-get retries 1)         ; one retry: a dead site costs 40 s, not 80
@@ -49,19 +58,23 @@
 !(set-tool-option http-get remember-approval yes) ; a GET is safe to repeat: approve a URL once per session
 
 !(declare-tool arxiv-search "research papers with title, authors, date, url and full abstract (no http-get needed). Input: words, or latest + words for newest first; a category like cs.LG cs.AI cs.CL cs.CV stat.ML; | N for how many (default 5). E.g. latest cs.LG | 5" safe agent_tools.arxiv_search)
+!(set-tool-option arxiv-search example "latest cs.LG | 5")
 !(set-tool-option arxiv-search timeout 30)
 !(set-tool-option arxiv-search retries 1)
 !(set-tool-option arxiv-search max-length 300)
 !(set-tool-option arxiv-search max-output 15000)
 
-!(declare-tool now "the current date and time (input: anything)" safe agent_tools.now)
+!(declare-tool now "the current date and time: for today, this year, ages, deadlines, how long ago (input: anything)" safe agent_tools.now)
+!(set-tool-option now example "now")
 !(set-tool-option now allow-empty yes)
 
 ; ============================================================ tools (MeTTa → AtomSpace)
 ; These run INSIDE PeTTa and query the long-term AtomSpace &kb directly.
 
 !(declare-tool memory-search "search long-term memory (facts learned in earlier sessions and past tasks); input is a short query" safe metta)
+!(set-tool-option memory-search example "capital of france")
 !(declare-tool memory-store "store a fact in long-term memory; input is an S-expression like (capital france paris). Never secrets." safe metta)
+!(set-tool-option memory-store example "(capital france paris)")
 
 (= (metta-tool memory-search $query)
    (let* (($facts (relevant-facts $query))
@@ -97,7 +110,7 @@
 
 !(declare-skill math "solve calculations and word problems"
                 (calc)
-                (calculate compute sum total percent percentage multiply divide plus minus average how many much math equation times))
+                (calculate compute sum total percent percentage multiply divide plus minus average how many much math equation times add subtract product difference))
 !(set-skill-info math procedure "1. turn the question into ONE arithmetic expression. 2. calc it. 3. Answer with the number and its unit.")
 !(set-skill-info math output "the number, with units")
 !(set-skill-info math on-error "if calc rejects the input, rewrite it with only digits and + - * / ( ) and retry")

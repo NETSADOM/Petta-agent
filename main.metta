@@ -1,7 +1,7 @@
 ; main.metta — P-agent command line.   sh run.sh main.metta   (Ubuntu Bash)
 ;
 ; Your tools and skills go in my_capabilities.metta (imported below).
-; Commands: help tools skills memory quit — anything else is a goal.
+; Commands: help tools skills memory history clear quit — anything else is a goal.
 ; While the agent works, type c + Enter to cancel the current goal.
 ;
 ; This file is only the INTERFACE: it reads input and renders results.
@@ -49,6 +49,8 @@
                          ($stats (memory-stats)))
                         (py-call (ui.list_rows "Stats" ($stats)))))
           (history (py-call (ui.show_text "This session" (py-call (session.summary)))))
+          (clear  (py-call (ui.clear_screen)))
+          (cls    (py-call (ui.clear_screen)))
           ($goal  (let $r (run-goal $goal)
                        (save-memory))))))          ; after every goal: crash-safe
 

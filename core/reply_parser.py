@@ -29,6 +29,12 @@ def q(s):
     return '"' + s.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t") + '"'
 
 
+def write_file_input(path, content):
+    """(action write-file "PATH" "CONTENT") → the JSON input write_file takes.
+    The content arrives already unescaped (sread turned \\n into a newline)."""
+    return json.dumps({"path": str(path), "content": str(content)}, ensure_ascii=False)
+
+
 def sym(s):
     """A MeTTa symbol: lowercase, - instead of _ / spaces, safe characters only."""
     s = re.sub(r"[\s_]+", "-", str(s).strip().lower())
@@ -125,6 +131,8 @@ def _plan(tasks):
     for i, t in enumerate(tasks if isinstance(tasks, list) else [], 1):
         if isinstance(t, str):
             t = {"task": t}
+        if not isinstance(t, dict):
+            return ""
         tid = sym(_get(t, "id") or f"t{i}")
         desc = _get(t, "task", "description", "desc", "name") or ""
         opts = ""
@@ -313,7 +321,7 @@ def last_reply(_=None):
     return shown or "(an empty reply)"
 
 
-def extract(text):
+def _extract(text):
     """→ ["found", sexpr] | ["none"]. A reply with several tool calls becomes
     ONE (actions (action T "in") ...) atom: they run in order, in one turn."""
     t = str(text).strip()
@@ -329,3 +337,27 @@ def extract(text):
             return ["found", s]
     s = _unclosed_string_form(re.sub(r"```[a-zA-Z]*", "", t))
     return ["found", s] if s else ["none"]
+
+
+def extract(text):
+    """Malformed model data is a recoverable reply, never a Python exception."""
+    try:
+        return _extract(text)
+    except (TypeError, ValueError, KeyError, IndexError, RecursionError):
+        return ["none"]
+
+
+def prose_final(text):
+    """Last format-repair fallback: quote substantial prose as a final proposal.
+
+    Never infer tool calls. The caller must require semantic verification, so
+    formatting recovery cannot turn unsupported prose into a successful answer.
+    """
+    text = str(text).strip()
+    if len(text) < 120 or text.startswith(("{", "[", "(", "```")):
+        return ""
+    if len(re.findall(r"[.!?](?:\s|$)|\n", text)) < 2:
+        return ""
+    if re.search(r"\((?:action|actions|final|task-done|plan)\b", text):
+        return ""
+    return "(final " + q(text) + ")"

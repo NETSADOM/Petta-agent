@@ -1,123 +1,74 @@
-#!/usr/bin/env python3
-"""Simple command-line to-do application.
-
-The application supports four commands:
-
-  add "<description>"
-      Add a new to‑do item.
-
-  list
-      List all items with their status.
-
-  done <id>
-      Mark the item with the given id as completed.
-
-  remove <id>
-      Remove the item with the given id.
-
-All items are stored in a JSON file located next to this script
-(`todo/todo.json`).  The JSON structure is a list of objects:
-
-  {
-      "id": 1,
-      "description": "Buy milk",
-      "done": false
-  }
-
-The id is an integer that increments for each new item.
-"""
-
-import argparse
 import json
 import os
 import sys
-from pathlib import Path
 
-DATA_FILE = Path(__file__).with_name("todo.json")
+DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'todo.json')
 
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    return []
 
-def load_items():
-    if not DATA_FILE.exists():
-        return []
-    with DATA_FILE.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_items(items):
-    with DATA_FILE.open("w", encoding="utf-8") as f:
+def save_data(items):
+    with open(DATA_FILE, 'w') as f:
         json.dump(items, f, indent=2)
 
-
-def next_id(items):
-    if not items:
-        return 1
-    return max(item["id"] for item in items) + 1
-
-
-def add_item(description):
-    items = load_items()
-    item = {"id": next_id(items), "description": description, "done": False}
-    items.append(item)
-    save_items(items)
-    print(f"Added item {item['id']}: {description}")
-
+def add(title):
+    items = load_data()
+    items.append({'title': title, 'done': False})
+    save_data(items)
+    print(f'Added: {title}')
 
 def list_items():
-    items = load_items()
+    items = load_data()
     if not items:
-        print("No items.")
+        print('No items.')
         return
-    for item in items:
-        status = "✓" if item["done"] else "✗"
-        print(f"{item['id']}. [{status}] {item['description']}")
+    for i, item in enumerate(items):
+        mark = 'x' if item['done'] else ' '
+        print(f"{i+1}. [{mark}] {item['title']}")
 
-
-def mark_done(item_id):
-    items = load_items()
-    for item in items:
-        if item["id"] == item_id:
-            item["done"] = True
-            save_items(items)
-            print(f"Marked item {item_id} as done.")
-            return
-    print(f"Item {item_id} not found.")
-
-
-def remove_item(item_id):
-    items = load_items()
-    new_items = [item for item in items if item["id"] != item_id]
-    if len(new_items) == len(items):
-        print(f"Item {item_id} not found.")
+def done(index):
+    items = load_data()
+    if index < 1 or index > len(items):
+        print(f'Invalid index: {index}')
         return
-    save_items(new_items)
-    print(f"Removed item {item_id}.")
+    items[index - 1]['done'] = True
+    save_data(items)
+    print(f"Marked done: {items[index - 1]['title']}")
 
+def remove(index):
+    items = load_data()
+    if index < 1 or index > len(items):
+        print(f'Invalid index: {index}')
+        return
+    removed = items.pop(index - 1)
+    save_data(items)
+    print(f"Removed: {removed['title']}")
 
-def main():
-    parser = argparse.ArgumentParser(description="Simple to‑do list.")
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    sub.add_parser("list", help="List all items")
-
-    add = sub.add_parser("add", help="Add a new item")
-    add.add_argument("description", help="Description of the item")
-
-    done = sub.add_parser("done", help="Mark an item as done")
-    done.add_argument("id", type=int, help="ID of the item")
-
-    remove = sub.add_parser("remove", help="Remove an item")
-    remove.add_argument("id", type=int, help="ID of the item")
-
-    args = parser.parse_args()
-
-    if args.cmd == "list":
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print('Usage: todo.py <add|list|done|remove> [args]')
+        sys.exit(1)
+    cmd = sys.argv[1]
+    if cmd == 'add':
+        if len(sys.argv) < 3:
+            print('Usage: todo.py add <title>')
+            sys.exit(1)
+        add(sys.argv[2])
+    elif cmd == 'list':
         list_items()
-    elif args.cmd == "add":
-        add_item(args.description)
-    elif args.cmd == "done":
-        mark_done(args.id)
-    elif args.cmd == "remove":
-        remove_item(args.id)
-
-if __name__ == "__main__":
-    main()
+    elif cmd == 'done':
+        if len(sys.argv) < 3:
+            print('Usage: todo.py done <index>')
+            sys.exit(1)
+        done(int(sys.argv[2]))
+    elif cmd == 'remove':
+        if len(sys.argv) < 3:
+            print('Usage: todo.py remove <index>')
+            sys.exit(1)
+        remove(int(sys.argv[2]))
+    else:
+        print(f'Unknown command: {cmd}')
+        sys.exit(1)
